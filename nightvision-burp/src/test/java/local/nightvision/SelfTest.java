@@ -273,7 +273,9 @@ public class SelfTest {
         // These suites add real child-process and local HTTPS behavior to the mock API coverage.
         LoginSelfTest.run();
         TlsSelfTest.run();
-        System.out.println("PASS: " + checks + " checks (REST, SSO, saved-login boundaries, real loopback TLS trust/hostname checks, structured traffic, and Swing workflow).");
+        ReportSelfTest.run();
+        PersistenceSelfTest.run();
+        System.out.println("PASS: " + checks + " checks (REST, SSO, TLS, traffic, reports, real Java preference persistence, and Swing workflow).");
     }
     /** Collects a Java HTTP BodyPublisher so tests can inspect the exact outgoing JSON payload. */
     static String body(HttpRequest request) throws Exception {

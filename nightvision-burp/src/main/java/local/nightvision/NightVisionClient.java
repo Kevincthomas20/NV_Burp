@@ -170,7 +170,7 @@ public final class NightVisionClient {
     private JsonObject exchange(URI u, JsonObject update) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(u).timeout(Duration.ofSeconds(45))
                 .header("Authorization", authorization).header("Accept", "application/json")
-                .header("User-Agent", "NightVision-Burp/0.3.2");
+                .header("User-Agent", "NightVision-Burp/0.4.1");
         if (update == null) builder.GET();
         else builder.header("Content-Type", "application/json").PUT(HttpRequest.BodyPublishers.ofString(update.toString(), StandardCharsets.UTF_8));
         Reply r = transport.send(builder.build());

@@ -67,6 +67,7 @@ public final class NightVisionExtension implements BurpExtension {
     private final TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(model);
     private volatile SwingWorker<?, ?> worker;
     private String namespace = "offline-demo"; // Separates demo notes from each API origin's notes.
+    private String loadedScanId = ""; // The scan actually loaded, independently of later edits to Scan UUID.
     private volatile boolean unloaded;
 
     /** Required no-argument constructor used when Burp loads the extension. */
@@ -97,7 +98,7 @@ public final class NightVisionExtension implements BurpExtension {
             if (unloaded) return;
             buildUi();
             api.userInterface().registerSuiteTab("NightVision", root);
-            api.logging().logToOutput("NightVision validator 0.3.2 loaded. SSO uses the official NightVision CLI and its saved credential. The extension does not persist tokens or passwords. Target requests open in Repeater for manual sending.");
+            api.logging().logToOutput("NightVision validator 0.4.1 loaded. SSO uses the official NightVision CLI and its saved credential. The extension does not persist tokens or passwords. Target requests open in Repeater for manual sending.");
         });
     }
     /** Creates a monospaced plain-text editor, with editing enabled only where intended. */
@@ -148,7 +149,7 @@ public final class NightVisionExtension implements BurpExtension {
         scans.addActionListener(e -> { ScanChoice s = (ScanChoice) scans.getSelectedItem(); if (s != null) scanId.setText(s.id()); });
         top.add(row(new JLabel("Scan"), scans));
         top.add(row(new JLabel("Scan UUID"), scanId, button("Load findings", this::loadFindings), button("Fetch full finding", this::fetchDetail)));
-        top.add(row(new JLabel("Filter findings"), search, button("Export local validations", this::export)));
+        top.add(row(new JLabel("Filter findings"), search, button("Export local validations (JSON)", this::export), button("Validation report…", this::validationReport)));
         root.add(top, BorderLayout.NORTH);
 
         // Render service-controlled labels as text rather than Swing's optional HTML markup.
@@ -406,7 +407,7 @@ public final class NightVisionExtension implements BurpExtension {
         if (c == null) { error("Connect to NightVision first."); return; }
         String id = scanId.getText().trim();
         background("Loading all pages of findings…", () -> c.issues(id), rows -> {
-            setFindings(rows); status.setText(rows.size() + " findings loaded. Select one to inspect evidence.");
+            setFindings(rows); loadedScanId = id; status.setText(rows.size() + " findings loaded. Select one to inspect evidence.");
         });
     }
     /** Refreshes one issue so traffic omitted from the scan's list response can be inspected. */
@@ -430,7 +431,11 @@ public final class NightVisionExtension implements BurpExtension {
     }
     /** Replaces table and model data together, then clears stale evidence and editor contents. */
     private void setFindings(List<JsonObject> rows) {
-        table.clearSelection(); model.setRowCount(0); findings.clear();
+        loadedScanId = "";
+        table.clearSelection();
+        // Clear lead/anchor as well: a sorter must not cache old row indices while the model is empty.
+        table.getSelectionModel().setAnchorSelectionIndex(-1); table.getSelectionModel().setLeadSelectionIndex(-1);
+        model.setRowCount(0); findings.clear();
         for (JsonObject data : rows) { findings.add(new Finding(data)); model.addRow(new Object[7]); updateRow(findings.size() - 1); }
         showSelected();
     }
@@ -476,19 +481,39 @@ public final class NightVisionExtension implements BurpExtension {
             status.setText("Opened in Repeater. Verify the request, then click Send there. No validation result was inferred.");
         } catch (RuntimeException e) { error(e instanceof IllegalArgumentException ? e.getMessage() : "Could not create the Burp request. Check the request and destination."); }
     }
-    /** Builds a stable preference key from API origin plus issue ID, keeping demo data separate. */
-    private String annotationKey(String id) {
+    /** Computes the full digest of API origin plus issue ID, keeping demo and service data separate. */
+    private byte[] annotationDigest(String id) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest((namespace + "\n" + id).getBytes(StandardCharsets.UTF_8));
-            return "nightvision.validation." + HexFormat.of().formatHex(digest);
+            return MessageDigest.getInstance("SHA-256").digest((namespace + "\n" + id).getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) { throw new IllegalStateException(e); }
+    }
+    /** A full SHA-256 in unpadded base64url makes a 57-character key, below Java's 80-character limit. */
+    private String annotationKey(String id) {
+        return "nv.validation." + Base64.getUrlEncoder().withoutPadding().encodeToString(annotationDigest(id));
     }
     /** Reads local annotations, treating missing or malformed preference values as unreviewed. */
     private JsonObject annotation(String id) {
         String saved = api.persistence().preferences().getString(annotationKey(id));
+        if (saved == null) {
+            // Older lenient hosts may have accepted the previous 87-character key. Read it without
+            // deleting or rewriting it; a new explicit save writes the supported compact key.
+            try { saved = api.persistence().preferences().getString("nightvision.validation." + HexFormat.of().formatHex(annotationDigest(id))); }
+            catch (IllegalArgumentException ignored) { /* Some preference adapters also reject long read keys. */ }
+        }
         if (saved == null) return new JsonObject();
         try { return JsonParser.parseString(saved).getAsJsonObject(); }
         catch (RuntimeException e) { return new JsonObject(); }
+    }
+    /** Shares one checked write path for manual saves and verified remote-sync receipts. */
+    private void storeAnnotation(String id, JsonObject value) {
+        String json = Finding.JSON.toJson(value);
+        if (json.length() > 7000 || json.getBytes(StandardCharsets.UTF_8).length > 7000)
+            throw new IllegalStateException("Local validation exceeds the supported preference size.");
+        String key = annotationKey(id);
+        api.persistence().preferences().setString(key, json);
+        // A provider that silently drops a write must not result in a success message or sync receipt.
+        if (!json.equals(api.persistence().preferences().getString(key)))
+            throw new IllegalStateException("Local validation save could not be read back.");
     }
     /** Saves the local verdict, notes, and timestamp without calling the NightVision API. */
     private void saveValidation() {
@@ -500,10 +525,10 @@ public final class NightVisionExtension implements BurpExtension {
         // Check encoded size as well as character count because non-ASCII notes use more UTF-8 bytes.
         if (json.length() > 7000 || json.getBytes(StandardCharsets.UTF_8).length > 7000) { error("Shorten the notes to fit the local preference store (7,000 bytes)."); return; }
         try {
-            api.persistence().preferences().setString(annotationKey(f.id()), json);
+            storeAnnotation(f.id(), value);
             updateRow(table.convertRowIndexToModel(table.getSelectedRow()));
-            status.setText("Validation saved in this Burp installation. NightVision was not updated.");
-        } catch (RuntimeException e) { error("Could not save local validation to Burp preferences."); }
+            status.setText("Validation saved and read back from Burp preferences. NightVision was not updated.");
+        } catch (RuntimeException e) { error("Local validation was not confirmed in Burp preferences. Your edits are still in the editor; copy them before reloading and retry saving."); }
     }
     /** The explicit remote-write action: capture one issue and its notes, then update and verify. */
     private void markFalsePositive() {
@@ -529,7 +554,7 @@ public final class NightVisionExtension implements BurpExtension {
         // Remote success remains true even if the independent Burp preference write fails.
         boolean localSaved = false;
         try {
-            api.persistence().preferences().setString(annotationKey(issueId), Finding.JSON.toJson(value));
+            storeAnnotation(issueId, value);
             localSaved = true;
         } catch (RuntimeException e) { /* The verified remote change still succeeded. */ }
         for (int i = 0; i < findings.size(); i++) if (findings.get(i).id().equals(issueId)) {
@@ -560,6 +585,121 @@ public final class NightVisionExtension implements BurpExtension {
         try { Files.writeString(path, Finding.JSON.toJson(doc), StandardCharsets.UTF_8); status.setText("Saved validation export. It includes saved notes, with no API token or raw traffic."); }
         catch (Exception e) { error("Could not write the export file."); }
     }
+    /** Scopes refer to loaded data only; visible rows follow the table's current filtering and sort. */
+    enum ReportScope {
+        ALL("All loaded findings"), VISIBLE("Visible (filtered) findings"), SELECTED("Selected finding");
+        private final String label;
+        ReportScope(String label) { this.label = label; }
+        @Override public String toString() { return label; }
+    }
+
+    /** Collects report choices without changing saved annotations or performing any API operation. */
+    private void validationReport() {
+        if (findings.isEmpty()) { error("Load findings first."); return; }
+        JTextField title = new JTextField("NightVision validation report", 36), analyst = new JTextField(30);
+        JComboBox<ValidationReport.Format> format = new JComboBox<>(ValidationReport.Format.values());
+        JComboBox<ReportScope> scope = new JComboBox<>(ReportScope.values());
+        if (!search.getText().isBlank()) scope.setSelectedItem(ReportScope.VISIBLE);
+        JCheckBox reviewed = new JCheckBox("Reviewed findings only", false);
+        JCheckBox savedNotes = new JCheckBox("Include saved analyst notes", true);
+        JCheckBox scanner = new JCheckBox("Include scanner payload and evidence text (HTML)", false);
+        JCheckBox http = new JCheckBox("Include the selected finding's current capture choices (HTML)", false);
+        http.setToolTipText("Includes the selected request and response only if that finding belongs to the chosen report scope.");
+        http.setEnabled(selected() != null);
+        format.addActionListener(e -> {
+            boolean html = format.getSelectedItem() == ValidationReport.Format.HTML;
+            scanner.setEnabled(html); http.setEnabled(html && selected() != null);
+            if (!html) { scanner.setSelected(false); http.setSelected(false); }
+        });
+        JPanel form = new JPanel(); form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+        form.add(row(new JLabel("Title"), title)); form.add(row(new JLabel("Analyst (optional)"), analyst));
+        form.add(row(new JLabel("Format"), format, new JLabel("Scope"), scope));
+        form.add(row(reviewed, savedNotes)); form.add(row(scanner)); form.add(row(http));
+        form.add(row(new JLabel("Save local validation first. Unsaved notes and request edits are excluded.")));
+        form.add(row(new JLabel("HTTP evidence is the original NightVision capture; Repeater results are not captured.")));
+        form.add(row(new JLabel("Common credential patterns are redacted. Review remaining content before sharing.")));
+        if (JOptionPane.showConfirmDialog(root, form, "Validation report", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        try {
+            ValidationReport.Options options = new ValidationReport.Options(title.getText(), analyst.getText(), savedNotes.isSelected(), scanner.isSelected(), http.isSelected());
+            ValidationReport.Snapshot snapshot = reportSnapshot((ReportScope) scope.getSelectedItem(), reviewed.isSelected(), options);
+            ValidationReport.Format selectedFormat = (ValidationReport.Format) format.getSelectedItem();
+            background("Preparing validation report…", () -> ValidationReport.render(snapshot, selectedFormat), this::previewReport);
+        } catch (RuntimeException e) { error(e.getMessage()); }
+    }
+
+    /** Snapshots selected fields on the EDT; no mutable JSON or editor text is passed to the renderer. */
+    ValidationReport.Snapshot reportSnapshot(ReportScope scope, boolean reviewedOnly, ValidationReport.Options options) {
+        List<Finding> chosen = new ArrayList<>();
+        if (scope == ReportScope.SELECTED) {
+            Finding finding = selected();
+            if (finding == null) throw new IllegalArgumentException("Select a finding before choosing Selected finding scope.");
+            chosen.add(finding);
+        } else if (scope == ReportScope.VISIBLE) {
+            for (int i = 0; i < table.getRowCount(); i++) chosen.add(findings.get(table.convertRowIndexToModel(i)));
+        } else chosen.addAll(findings);
+        if (!reviewedOnly && chosen.size() > ValidationReport.MAX_ROWS)
+            throw new IllegalArgumentException("Reports support up to 5,000 findings. Filter the table or select a smaller scope.");
+        Finding selected = selected();
+        List<ValidationReport.Row> rows = new ArrayList<>();
+        for (Finding finding : chosen) {
+            JsonObject annotation = annotation(finding.id()), sync = Finding.object(annotation, "nightvision_sync");
+            String state = Finding.s(annotation, "status"); if (state.isBlank()) state = "Not reviewed";
+            List<ValidationReport.Capture> captures = new ArrayList<>();
+            if (options.httpEvidence() && selected != null && finding == selected) {
+                // Use the original selector entries, never the editable Request tab's current text.
+                for (boolean isRequest : List.of(true, false)) {
+                    Traffic.Message message = (Traffic.Message) (isRequest ? capturedRequests : capturedResponses).getSelectedItem();
+                    if (message != null) captures.add(new ValidationReport.Capture(isRequest ? "request" : "response", message.source(), message.note(), message.destination(), message.text()));
+                }
+            }
+            String scan = Finding.s(finding.data(), "scan_id"); if (scan.isBlank()) scan = loadedScanId;
+            ValidationReport.Row row = new ValidationReport.Row(finding.id(), scan, finding.title(), finding.severity(), Finding.s(finding.data(), "http_method"),
+                finding.targetUrl(), finding.resolutionDisplay(), state, Finding.s(annotation, "updated_at"), options.notes() ? Finding.s(annotation, "notes") : "",
+                Finding.s(sync, "status"), "verified".equals(Finding.s(sync, "status")) ? Finding.s(sync, "verified_at") : "",
+                options.scannerEvidence() ? Finding.s(finding.data(), "payload") : "", options.scannerEvidence() ? Finding.s(finding.data(), "evidence") : "",
+                options.scannerEvidence() ? Finding.s(finding.data(), "evidence_details") : "", captures);
+            if (!reviewedOnly || row.reviewed()) rows.add(row);
+            if (rows.size() > ValidationReport.MAX_ROWS)
+                throw new IllegalArgumentException("Reports support up to 5,000 findings. Filter the table or select a smaller scope.");
+        }
+        if (rows.isEmpty()) throw new IllegalArgumentException("No findings match the report scope and review filter.");
+        if (rows.size() > ValidationReport.MAX_ROWS) throw new IllegalArgumentException("Reports support up to 5,000 findings. Filter the table or select a smaller scope.");
+        String reportScan = loadedScanId;
+        if (reportScan.isBlank()) {
+            List<String> scanIds = rows.stream().map(ValidationReport.Row::scanId).filter(value -> !value.isBlank()).distinct().toList();
+            if (scanIds.size() == 1) reportScan = scanIds.get(0);
+        }
+        return new ValidationReport.Snapshot(options, namespace, reportScan, scope + (reviewedOnly ? " / reviewed findings only" : ""), Instant.now(), rows);
+    }
+
+    /** Shows the already-redacted report before offering a destination; previewing performs no writes. */
+    private void previewReport(ValidationReport.Document report) {
+        JEditorPane preview = new JEditorPane("text/html", report.previewHtml());
+        preview.setEditable(false); preview.setCaretPosition(0);
+        JScrollPane pane = new JScrollPane(preview); pane.setPreferredSize(new Dimension(900, 620));
+        int action = JOptionPane.showOptionDialog(root, pane, report.format() + " preview — " + report.count() + " findings",
+            JOptionPane.DEFAULT_OPTION, JOptionPane.PLAIN_MESSAGE, null, new Object[]{"Save report…", "Close"}, "Save report…");
+        if (action != 0 || unloaded) return;
+        JFileChooser chooser = new JFileChooser();
+        String ext = report.format().extension;
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(report.format() + " (*." + ext + ")", ext));
+        chooser.setSelectedFile(new java.io.File("nightvision-validation-report." + ext));
+        if (chooser.showSaveDialog(root) != JFileChooser.APPROVE_OPTION) return;
+        Path chosen = chooser.getSelectedFile().toPath();
+        if (!chosen.getFileName().toString().toLowerCase(Locale.ROOT).endsWith("." + ext)) chosen = chosen.resolveSibling(chosen.getFileName() + "." + ext);
+        final Path path = chosen;
+        final boolean replace = Files.exists(path);
+        if (replace && JOptionPane.showConfirmDialog(root, "Replace the existing report?", "Validation report", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        // Queue the save after the render worker's done/finally has released its busy state.
+        SwingUtilities.invokeLater(() -> {
+            if (unloaded) return;
+            background("Saving validation report…", () -> {
+                try { ValidationReport.write(path, report, replace); return path; }
+                catch (Exception e) { throw new IllegalStateException("Could not save the report. Check the destination and write access, or choose another file."); }
+            }, saved -> status.setText("Saved " + report.format() + " for " + report.count() + " findings: " + saved));
+        });
+    }
+
     /** Loads bundled synthetic evidence to exercise the interface without a live service. */
     private void demo() {
         disconnect();

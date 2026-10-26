@@ -1,11 +1,11 @@
 # NightVision Finding Validator for Burp Suite
 
-**Extension version:** 0.3.2  
+**Extension version:** 0.4.1  
 **Documentation updated:** October 26, 2026
 
 NightVision Finding Validator brings NightVision scan findings into Burp Suite for manual review. Connect to NightVision, select a scan, examine the evidence, open a finding's HTTP request in Repeater, and record your assessment. When you determine that a finding is a false positive, you can explicitly update its resolution in NightVision and verify that the change saved.
 
-The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.3.2 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
+The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.4.1 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
 
 ## Contents
 
@@ -67,6 +67,7 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Save local validation | Saves the local assessment, notes, and timestamp in Burp's extension preferences. |
 | Mark false positive in NightVision | Updates the selected issue's resolution and retrieves it again to verify the result. |
 | Export local validations | Saves loaded finding identifiers and saved local annotations as JSON. |
+| Validation report… | Previews and saves scoped CSV/HTML reports with saved verdicts/notes, summary counts, common credential redaction, and optional original evidence in HTML. |
 | Offline demo | Loads a synthetic finding without requiring an API token. |
 | Status line | Reports progress, record counts, save and sync results, and errors. |
 | Adjustable layout | Lets you resize the divider between the findings table and detail area. |
@@ -98,10 +99,10 @@ Rebuilding requires JDK 17 or 21 and either Python 3.8 or later for the included
 
 ### Install the prebuilt JAR
 
-1. Extract `nightvision-burp-extension-v0.3.2.zip`.
+1. Extract `nightvision-burp-extension-v0.4.1.zip`.
 2. Open Burp Suite and go to **Extensions → Installed → Add**.
 3. Choose **Java** as the extension type.
-4. Select `nightvision-burp/dist/nightvision-burp-0.3.2.jar` from the extracted package.
+4. Select `nightvision-burp/dist/nightvision-burp-0.4.1.jar` from the extracted package.
 5. Click **Next** and inspect the extension's **Output** and **Errors** tabs.
 6. Close the installer and open the new **NightVision** tab.
 
@@ -212,7 +213,7 @@ SSO and saved-login actions connect only to NightVision’s production API at `h
 
 Browser sign-in and CLI login can succeed while the Java API connection fails with `SSLHandshakeException`. They use different TLS implementations and may use different trusted-certificate stores. A company TLS-inspection gateway can be one cause, but the exception can also mean an expired certificate, a hostname mismatch, or a protocol problem.
 
-Version 0.3.2 retains Java’s default trusted roots and adds these API-specific settings:
+Version 0.4.1 retains Java’s default trusted roots and adds these API-specific settings:
 
 | Control | Behavior |
 | --- | --- |
@@ -429,7 +430,7 @@ These are manual labels. An HTTP status code, reflected string, expired session,
 3. Enter observations in **Analyst notes**.
 4. Click **Save local validation**.
 
-The status, notes, and update timestamp are stored in Burp's extension preferences. The table's **Local validation** column updates. No API write occurs.
+The status, notes, and update timestamp are stored in Burp's extension preferences. The extension reads the written value back before showing **Validation saved and read back from Burp preferences** and updating the table's **Local validation** column. No API write occurs. A failed or unconfirmed write leaves your edits in the editor and shows an error rather than a success message.
 
 Notes are saved explicitly, not while typing. For example:
 
@@ -443,6 +444,8 @@ observed under these test conditions.
 ### Persistence and identity
 
 Annotations are associated with the API origin and issue UUID. They can survive Burp restarts when the same preference store is retained. They are not scoped by this extension to a Burp project and do not automatically transfer to other machines or analysts.
+
+Version 0.4.1 fixes an invalid preference-key length in earlier releases: the previous keys were 87 characters, exceeding Java's 80-character key limit. Current keys are 57 characters and retain the full SHA-256 identity. Existing records accepted by older lenient hosts remain readable; a new explicit save writes the supported key. Before unloading an older extension, copy any notes still visible in its editor. Values from rejected saves were never persisted and cannot be recovered automatically.
 
 Different issue UUIDs have separate notes, even when findings have similar titles or paths. Demo records use an `offline-demo` namespace. A different origin representation can also produce a different annotation identity.
 
@@ -516,7 +519,19 @@ Reverse a remote classification through NightVision's interface or a separately 
 
 ## 12. Export validation results
 
-Click **Export local validations**, select a destination, and save the JSON file. The default filename is `nightvision-validations.json`. Existing files require confirmation before replacement.
+### CSV and HTML validation reports
+
+Click **Validation report…** to choose a title, optional analyst name, format, scope, and content options. You can report on all loaded findings, visible rows in their current sort order, or the selected finding, and restrict any scope to saved reviewed verdicts. Save local validation first: unsaved notes, verdict changes, and request edits are excluded.
+
+HTML includes summary counts by local verdict and severity, finding metadata, and optionally saved notes, scanner evidence text, and the selected finding's chosen original HTTP captures. CSV includes one row per finding with metadata and optional saved notes; HTTP messages and scanner payloads are excluded. Both show the local verdict separately from the last loaded NightVision resolution and any historical sync receipt.
+
+Reports preview before saving and redact common credential patterns across their fields. HTML escapes external text and has no scripts or external assets. CSV quotes fields and prefixes risky formula starters as text. Redaction cannot detect every secret in prose; review content before sharing. Reports use loaded data without API calls or remote changes. Open saved HTML in a browser to print or save a PDF.
+
+Reports allow 5,000 findings and 16 MiB of output, limit individual fields to 16,000 characters with a truncation marker, and preview at most 50 findings. The exported file covers the full chosen scope. See [REPORTS.md](REPORTS.md) for scope rules, evidence provenance, redaction coverage, and limitations. Synthetic examples are included in `examples/`.
+
+### Existing JSON export
+
+Click **Export local validations (JSON)**, select a destination, and save the JSON file. The default filename is `nightvision-validations.json`. Existing files require confirmation before replacement.
 
 All currently loaded findings are exported, including rows hidden by a filter. Export is not limited to the selected row and does not gather findings from other unloaded scans. Row order follows the loaded collection rather than the table's visual sort order.
 
@@ -568,7 +583,7 @@ Save notes before exporting. Unsaved dropdown changes and note edits are not inc
 
 Exports omit the API token, original raw traffic, temporary request edits, Repeater responses, and temporary destination edits. The exported target is derived from the loaded finding, not the edited destination field. Names and analyst notes can still contain information you entered.
 
-There is no built-in import, scheduled export, CSV export, or report generator. The JSON is a portable record for reading or separate processing, not a built-in restore package.
+There is no built-in import or scheduled export. The JSON is a portable record for reading or separate processing, not a built-in restore package. Its existing output is separate from the new HTML/CSV report path and does not apply the report redactor.
 
 ## 13. Use the offline demo
 
@@ -604,6 +619,7 @@ The Java extension runs inside Burp, persists annotations in Burp preferences, a
 | Last verified sync metadata | Local annotation after successful verification. | No. |
 | False-positive resolution | NightVision after the explicit update succeeds. | Yes: `{"resolution":1}`. |
 | Validation export | User-selected file path. | No. |
+| HTML/CSV report | User-selected file path; prepared snapshot and preview in memory. Common credential patterns are redacted; optional original evidence appears only in HTML. | No. |
 
 ### Credentials and preferences
 
@@ -643,6 +659,7 @@ Repeater handles target traffic after manual sending. Networks requiring a proxy
 | Save local validation | No API request. | Writes preferences. |
 | Filter or sort | No API request. | Changes the table view. |
 | Export local validations | No API request. | Writes a local file. |
+| Validation report… | No API request. | Snapshots loaded data, previews, and writes a chosen CSV/HTML file. |
 | Offline demo | No API request. | Loads a bundled sample. |
 | Open in Repeater | No platform API or immediate target request. | Creates a tab for manual sending. |
 
@@ -750,7 +767,7 @@ The same source can be used on a suitable Kali, Ubuntu, or other Linux desktop. 
 The script creates:
 
 ```text
-dist/nightvision-burp-0.3.2.jar
+dist/nightvision-burp-0.4.1.jar
 ```
 
 It performs these steps:
@@ -793,7 +810,7 @@ mvn clean package
 Load the shaded output:
 
 ```text
-target/nightvision-burp-0.3.2.jar
+target/nightvision-burp-0.4.1.jar
 ```
 
 Maven includes Gson and SnakeYAML and treats Montoya as provided. The standalone regression checks are not registered with Maven Surefire. Use `tools/build.py` to run those checks. The Python build was exercised during development; the Maven alternative was not separately executed in that environment.
@@ -809,7 +826,7 @@ sha256sum -c SHA256SUMS.txt
 On Windows, from the project directory:
 
 ```powershell
-Get-FileHash .\dist\nightvision-burp-0.3.2.jar -Algorithm SHA256
+Get-FileHash .\dist\nightvision-burp-0.4.1.jar -Algorithm SHA256
 Get-Content .\dist\SHA256SUMS.txt
 ```
 
@@ -817,7 +834,7 @@ Compare the reported hash with the text file. That checksum describes the distri
 
 ## 18. Verification and test coverage
 
-Version 0.3.2 passed **191 checks**, without external NightVision API calls, covering:
+Version 0.4.1 passed **275 checks**, without external NightVision API calls, covering:
 
 - API endpoints, queries, token headers, and update payloads.
 - Pagination, loops, malformed collections, and credential boundaries.
@@ -841,8 +858,10 @@ Version 0.3.2 passed **191 checks**, without external NightVision API calls, cov
 - A synthetic older CLI that rejects `--timeout`, and noisy failing output larger than the retained capture cap.
 - Real loopback HTTPS with a generated test CA: reject untrusted chains before sending Authorization, accept a selected CA, reject a wrong hostname, and retain isolation from global JVM trust.
 - A real Swing connection failing on TLS and recovering after a CA is selected; safe diagnostics, invalid CA inputs, and retained uncertainty/no retry for TLS-failed writes.
+- Report scope and sorting, saved annotations versus unsaved edits, original capture provenance, optional evidence, common credential redaction, HTML escaping, CSV formula/quote/newline handling, size/preview limits, and staged file replacement.
+- A real temporary Java preference store: reproduction of the oversized-key failure, supported compact keys, saved status/notes/time, fresh-extension reload, written HTML/CSV, origin isolation, legacy reads, and truthful failure handling for dropped/throwing writes.
 
-These use mocked REST responses, a mock Montoya host, real synthetic CLI subprocesses, and a local HTTPS server. TLS fixtures use JDK `keytool` to generate temporary certificates and private keys during tests, then remove them. No generated private key is packaged. They do not prove real-tenant SSO/identity-provider compatibility, native Windows-store behavior on every JVM, company gateway compatibility, permissions, platform classification side effects, all evidence formats, or compatibility with every Burp version. The official Linux CLI’s help and compiled configuration/login routines were inspected; this confirmed current `nightvision.yml` storage and the top-level `token` key. No real account login was performed during development.
+These use mocked REST responses, a mock Montoya host, real synthetic CLI subprocesses, a real disposable Java preference node, and a local HTTPS server. TLS fixtures use JDK `keytool` to generate temporary certificates and private keys during tests, then remove them. No generated private key is packaged. They do not prove real-tenant SSO/identity-provider compatibility, native Windows-store behavior on every JVM, company gateway compatibility, permissions, platform classification side effects, all evidence formats, or compatibility with every Burp version. The official Linux CLI’s help and compiled configuration/login routines were inspected; this confirmed current `nightvision.yml` storage and the top-level `token` key. No real account login was performed during development.
 
 ### Suggested integration check
 
@@ -858,7 +877,7 @@ These use mocked REST responses, a mock Montoya host, real synthetic CLI subproc
 | Path | Purpose |
 | --- | --- |
 | `README.md` | This feature and operations guide. |
-| `dist/nightvision-burp-0.3.2.jar` | Prebuilt extension. |
+| `dist/nightvision-burp-0.4.1.jar` | Prebuilt extension. |
 | `dist/SHA256SUMS.txt` | Distributed JAR hash. |
 | `pom.xml` | Maven dependencies and shaded build. |
 | `tools/build.py` | Build and offline-check runner. |
@@ -867,6 +886,12 @@ These use mocked REST responses, a mock Montoya host, real synthetic CLI subproc
 | `src/main/java/local/nightvision/NightVisionLogin.java` | Official CLI login lifecycle, saved-credential reading, origin binding, cancel, and timeout. |
 | `SSO-SETUP.md` | Short SSO installation and upgrade guide. |
 | `TLS-SETUP.md` | API certificate-trust recovery guide. |
+| `REPORTS.md` | Report workflow, scope, evidence, redaction, and output limits. |
+| `examples/sample-validation-report.html` and `.csv` | Synthetic validation report examples. |
+| `src/main/java/local/nightvision/ValidationReport.java` | Immutable report model, HTML/CSV rendering, spreadsheet text protection, and staged file writes. |
+| `src/main/java/local/nightvision/ReportRedactor.java` | Common credential-pattern redaction for report fields. |
+| `src/test/java/local/nightvision/ReportSelfTest.java` | Report generation, scoping, escaping/redaction, and file-write regression checks. |
+| `src/test/java/local/nightvision/PersistenceSelfTest.java` | Real Java preference limits, save/read-back, reload-to-report, legacy compatibility, and failed-write regression checks. |
 | `src/main/java/local/nightvision/TlsSupport.java` | API-scoped trust, Windows roots, additional CA loading, hostname-preserving trust delegation, and safe TLS diagnostics. |
 | `src/test/java/local/nightvision/TlsSelfTest.java` | Real local HTTPS trust, hostname, isolation, and UI recovery tests. |
 | `src/main/java/local/nightvision/SavedLogin.java` | Bounded current-config/legacy-credential parsing and configured API checks. |
@@ -903,7 +928,8 @@ Apache 2.0 license texts for Gson and SnakeYAML are included in the package and 
 - No bulk remote update, finding deletion, or suppression-management controls are included.
 - Notes stay local; preferences retain the latest assessment and last verified sync, not full edit history.
 - No built-in import, cross-machine annotation synchronization, or purge-all control is included.
-- Exports are JSON and cover the loaded collection only.
+- JSON exports and HTML/CSV reports cover loaded data only. No multi-scan comparison or automatic refresh is included.
+- Report redaction covers common patterns, not all secrets/personal data. HTML evidence is limited to loaded scanner text and the selected finding's chosen original captures; Repeater retest evidence is not captured.
 - SSO depends on the official current CLI and a usable desktop browser; it is limited to the production API origin.
 - API trust can use JVM roots, available native Windows roots, and an additional CA certificate file. Importing password-protected trust stores and configuring client TLS private keys are not implemented.
 - No extension-level proxy or direct Bearer-token controls are included.
@@ -976,8 +1002,10 @@ Yes. **Full finding JSON** shows the entire loaded issue object. Unrecognized tr
 | 0.3.0 | Added SSO through the official CLI, saved-login reuse, CLI executable selection, user verification, cancel/timeout handling, and credential/process regression checks. |
 | 0.3.1 | Fixed current CLI YAML/JSON credential loading, added saved-file selection and safe connection diagnostics, and removed dependency on the CLI `--timeout` flag. |
 | 0.3.2 | Added API-scoped trusted Windows roots, an additional CA file option, classified TLS diagnostics, and real loopback TLS/hostname regression tests. |
+| 0.4.0 | Added scoped HTML/CSV validation reports, saved-note and optional evidence controls, redacted previews, summary counts, staged writes, synthetic examples, and report regression checks. |
+| 0.4.1 | Fixed oversized validation preference keys, added save read-back confirmation and legacy-key reads, and verified persistence through fresh controllers and written reports using a real Java preference store. |
 
-This README documents version 0.3.2.
+This README documents version 0.4.1.
 
 ### References
 

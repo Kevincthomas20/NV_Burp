@@ -1,4 +1,4 @@
-# NightVision SSO setup — version 0.3.2
+# NightVision SSO setup — version 0.4.1
 
 This build adds **Sign in with SSO** and **Use saved login** to Burp. It also
 includes the request/response evidence fixes from version 0.2.1.
@@ -11,7 +11,7 @@ includes the request/response evidence fixes from version 0.2.1.
 2. Extract the ZIP to a permanent folder. Save notes and export any validations
    you want as a separate record, then unload the old extension.
 3. In **Burp → Extensions → Installed → Add → Java**, select
-   `nightvision-burp/dist/nightvision-burp-0.3.2.jar`.
+   `nightvision-burp/dist/nightvision-burp-0.4.1.jar`.
 4. In the **NightVision** tab, leave **API origin** as
    `https://api.nightvision.net`. Leave the manual token field blank.
 5. If needed, click **Browse** beside **NightVision CLI** and select the actual
@@ -92,7 +92,7 @@ or API connection made automatically when the extension starts.
 
 ## Validation
 
-The build passed **191 checks**, including subprocess completion,
+The build passed **275 checks**, including subprocess completion,
 credential reuse, failure without stale-credential fallback, cancellation,
 timeout, unloading, account verification, and existing evidence/update flows.
 Regression tests include a CLI that rejects `--timeout` and writes a YAML

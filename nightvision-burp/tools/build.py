@@ -80,11 +80,11 @@ def build():
     cmd = [java, "-Djava.awt.headless=true", "-cp", str(tests) + os.pathsep + test_cp, "local.nightvision.SelfTest"]
     if options.preview: cmd.append(options.preview.resolve())
     run(cmd)
-    output = ROOT / "dist" / "nightvision-burp-0.3.2.jar"
+    output = ROOT / "dist" / "nightvision-burp-0.4.1.jar"
     output.parent.mkdir(exist_ok=True)
     # A JAR is a ZIP containing the manifest, compiled classes/resources, and bundled libraries.
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as jar:
-        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.3.2\r\n\r\n")
+        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.4.1\r\n\r\n")
         for path in sorted(classes.rglob("*")):
             if path.is_file(): jar.write(path, path.relative_to(classes).as_posix())
         # Exclude Montoya (paths[0]): Burp supplies that API at runtime.

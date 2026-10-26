@@ -1,4 +1,4 @@
-# API TLS connection recovery — version 0.3.2
+# API TLS connection recovery — version 0.4.1
 
 If browser SSO completes but Burp reports `SSLHandshakeException`, the failure
 is occurring in the extension's Java HTTPS connection to NightVision. The
@@ -9,7 +9,7 @@ certificate-date, and TLS negotiation failures.
 ## Update and reconnect
 
 1. Unload the previous extension and load
-   `nightvision-burp/dist/nightvision-burp-0.3.2.jar` from this ZIP.
+   `nightvision-burp/dist/nightvision-burp-0.4.1.jar` from this ZIP.
 2. Keep the normal NightVision API origin. Because you already completed
    browser login, click **Use saved login**.
 3. On Windows, leave **Use trusted Windows roots** selected. The API client
@@ -61,7 +61,7 @@ and reconnect to stop using that additional file.
 
 ## Validation
 
-The build passed **191 checks**, including real local HTTPS tests that reject
+The build passed **275 checks**, including real local HTTPS tests that reject
 untrusted chains before any authenticated request, accept the selected test
 CA, reject the wrong hostname, and keep that trust isolated from global JVM
 settings. Tests generate temporary certificates/private keys locally and
