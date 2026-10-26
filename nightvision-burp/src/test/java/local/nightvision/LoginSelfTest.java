@@ -19,22 +19,26 @@ import static local.nightvision.SelfTest.*;
 /** Tests use only temporary synthetic credentials, mock HTTP, and a child Java fixture. */
 final class LoginSelfTest {
     private static final String TOKEN = "synthetic-sso-credential";
+    /** Exercises CLI lifecycle, saved-file handling, and the corresponding Swing connection flow. */
     static void run() throws Exception {
         Path folder = Files.createTempDirectory("nightvision sso tests ");
         try {
             Path tokenFile = folder.resolve("saved-token");
             AtomicReference<ProcessBuilder> command = new AtomicReference<>();
             AtomicReference<Process> child = new AtomicReference<>();
+            // Reject alternate origins before touching a saved credential or starting the CLI.
             NightVisionLogin.requireProductionOrigin("https://API.NIGHTVISION.NET:443/");
             check(true, "SSO accepts only the production HTTPS origin, including its default port");
             for (String base : List.of("http://api.nightvision.net", "https://api.nightvision.net.evil.invalid", "https://api.nightvision.net:444", "https://api.nightvision.net/?x=y", "https://user@api.nightvision.net", "https://other.example.invalid"))
                 rejects(() -> NightVisionLogin.requireProductionOrigin(base), "Reject redirecting saved credentials to another origin");
+            // Successful launch must preserve argument boundaries, sanitize the environment, and omit secrets.
             NightVisionLogin success = login(tokenFile, "success", Duration.ofSeconds(5), command, child);
             check(success.signIn("C:\\Program Files\\Nightvision\\nightvision.exe").equals(TOKEN), "Read the credential produced by a successful login process");
             check(command.get().command().equals(List.of("C:\\Program Files\\Nightvision\\nightvision.exe", "login", "--api-url", "https://api.nightvision.net/api/v1/")), "Pass paths with spaces directly and support CLIs without --timeout");
             check(!command.get().environment().containsKey("NIGHTVISION_TOKEN") && !command.get().environment().containsKey("NIGHTVISION_API_URL"), "Inherited tokens and alternate API environment cannot override browser login");
             check(command.get().redirectErrorStream() && !success.diagnostics().contains("synthetic-output-secret") && !success.diagnostics().contains(TOKEN), "Drain merged CLI output while keeping raw output and credentials out of diagnostics");
             check(success.savedToken().equals(TOKEN), "A saved login can be reused without executing the CLI");
+            // A failed launch or exit cannot reuse an older token and pretend the requested login succeeded.
             try { login(tokenFile, "failure", Duration.ofSeconds(5), command, child).signIn("nightvision"); throw new AssertionError("Failed CLI cannot reuse stale credential"); }
             catch (IllegalStateException e) { check(e.getMessage().contains("exit 7") && !e.getMessage().contains("synthetic-output-secret") && !e.getMessage().contains(TOKEN), "CLI failure includes exit code without output or saved secrets"); }
             check(Files.readString(tokenFile).trim().equals(TOKEN), "Failed login does not delete an existing CLI credential");
@@ -46,6 +50,7 @@ final class LoginSelfTest {
                 Files.writeString(tokenFile, text);
                 rejects(() -> success.savedToken(), "Reject empty, malformed, and oversized saved credentials");
             }
+            // Test cancellation both before process creation and while the callback listener is running.
             NightVisionLogin stopped = login(tokenFile, "success", Duration.ofSeconds(5), command, child);
             stopped.cancel();
             try { stopped.signIn("nightvision"); throw new AssertionError("Canceled login cannot start"); }
@@ -67,9 +72,11 @@ final class LoginSelfTest {
             testConfigFormats(folder, command, child);
             testUi(tokenFile);
         } finally {
+            // Synthetic credentials and all fixture files are temporary, including on assertion failure.
             try (var files = Files.walk(folder)) { for (Path p : files.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(p); }
         }
     }
+    /** Replaces the executable with a child Java fixture while retaining the requested CLI arguments/environment. */
     static NightVisionLogin login(Path token, String mode, Duration timeout, AtomicReference<ProcessBuilder> command, AtomicReference<Process> child) {
         return new NightVisionLogin(token, timeout, builder -> {
             command.set(builder);
@@ -82,6 +89,7 @@ final class LoginSelfTest {
             Process process = fixture.start(); child.set(process); return process;
         });
     }
+    /** Covers current config precedence, legacy compatibility, safe parsing, and bounded CLI output. */
     static void testConfigFormats(Path folder, AtomicReference<ProcessBuilder> command, AtomicReference<Process> child) throws Exception {
         Path dir = Files.createDirectory(folder.resolve("current-cli")); Path legacy = dir.resolve("token"); Path config = dir.resolve("nightvision.yml");
         NightVisionLogin current = login(legacy, "old-cli", Duration.ofSeconds(5), command, child);
@@ -94,12 +102,14 @@ final class LoginSelfTest {
         for (String value : List.of("token: '" + TOKEN + "' # comment\n", "token: \"" + TOKEN + "\"\n", "{\"token\":\"" + TOKEN + "\",\"api-url\":\"https://api.nightvision.net/api/v1/\"}", "\ufefftoken: " + TOKEN + "\n")) {
             Files.writeString(config, value); check(current.savedToken().equals(TOKEN), "Read quoted YAML, comments, JSON, and UTF-8 BOM without including syntax in the token");
         }
+        // Malformed, tagged, nested, ambiguous, or wrong-origin configs must not expose their source text.
         Files.delete(legacy);
         for (String invalid : List.of("token: [" + TOKEN, "token: " + TOKEN + "\ntoken: duplicate-secret\n", "token: !!java.net.URL ['https://example.invalid']", "token: {secret: '" + TOKEN + "'}", "token: '" + TOKEN + "'\napi-url: https://other.example.invalid/api/v1/", "nested:\n  token: " + TOKEN + "\n", "token: '" + TOKEN + "'\nTOKEN: second-secret\n")) {
             Files.writeString(config, invalid);
             try { current.savedToken(); throw new AssertionError("Unsupported or ambiguous config cannot authenticate"); }
             catch (IllegalStateException e) { check(!e.getMessage().contains(TOKEN) && !e.getMessage().contains("duplicate-secret") && !e.getMessage().contains("second-secret"), "Reject malformed config, unsafe tags, wrong origin, nested/ambiguous tokens without leaking YAML source"); }
         }
+        // An explicit file is an exclusive choice, preventing fallback to a different saved account.
         Path selected = folder.resolve("explicit-login.yaml"); Files.writeString(selected, "token: " + TOKEN + "\n");
         check(current.savedToken(selected.toString()).equals(TOKEN), "Use an explicitly chosen login config when OS home directories differ");
         rejects(() -> current.savedToken(folder.resolve("missing-config.yml").toString()), "An explicit missing file must not fall back to another account's credential");
@@ -115,10 +125,12 @@ final class LoginSelfTest {
             check(!NightVisionLogin.failureHint(raw).contains(TOKEN), "Whitelist failure explanations rather than echoing CLI errors");
         Files.delete(legacy); Files.delete(dir); Files.delete(selected);
     }
+    /** Bounded polling lets cancellation tests wait until there is a real child process to stop. */
     static void awaitChild(AtomicReference<Process> child) throws Exception {
         for (int i = 0; i < 100; i++) { if (child.get() != null) return; Thread.sleep(10); }
         throw new AssertionError("Login process did not start");
     }
+    /** Verifies account checks precede scan loading and that Burp never persists the CLI token. */
     static void testUi(Path tokenFile) throws Exception {
         Map<String, String> preferences = new HashMap<>(); AtomicReference<Component> tab = new AtomicReference<>();
         AtomicReference<Object> unload = new AtomicReference<>(); List<HttpRequest> calls = new ArrayList<>();
@@ -160,6 +172,7 @@ final class LoginSelfTest {
         testUiErrors(tokenFile, 500, "HTTP 500", false);
         testUiCancellation(tokenFile, false); testUiCancellation(tokenFile, true);
     }
+    /** Confirms rejected account verification stops the connection and shows sanitized status guidance. */
     static void testUiErrors(Path tokenFile, int status, String expected, boolean authError) throws Exception {
         AtomicInteger requests = new AtomicInteger();
         NightVisionExtension extension = new NightVisionExtension(() -> new NightVisionLogin(tokenFile, Duration.ofSeconds(5), pb -> { throw new AssertionError("Saved login must not launch a process"); }),
@@ -173,6 +186,7 @@ final class LoginSelfTest {
             if (!authError) check(!text.contains("rejected") && !text.contains("expired"), "Do not mislabel service failures as expired login");
         });
     }
+    /** Exercises both Cancel sign-in and Burp unload against a running synthetic login process. */
     static void testUiCancellation(Path tokenFile, boolean unloading) throws Exception {
         AtomicReference<Process> child = new AtomicReference<>(); AtomicReference<Object> unload = new AtomicReference<>(); AtomicInteger requests = new AtomicInteger();
         NightVisionExtension extension = new NightVisionExtension(() -> login(tokenFile, "wait", Duration.ofSeconds(10), new AtomicReference<>(), child),
@@ -194,10 +208,12 @@ final class LoginSelfTest {
         SwingUtilities.invokeAndWait(() -> check(field(extension, "client") == null, "Canceled or unloaded sign-in never creates a connection"));
         check(Files.exists(tokenFile), "Cancellation does not delete the shared saved CLI credential");
     }
+    /** Calls the private sign-in action through the same boolean mode selected by its UI buttons. */
     static void connectLogin(Object extension, boolean browser) {
         try { Method method = extension.getClass().getDeclaredMethod("connectLogin", boolean.class); method.setAccessible(true); method.invoke(extension, browser); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
+    /** Adds unload-handler capture to the basic Montoya mock so cleanup can be tested. */
     static Object mockWithUnload(Class<?> type, Map<String, String> prefs, AtomicReference<Component> tab, AtomicReference<Object> unload) {
         return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (p, method, args) -> {
             if (method.getName().equals("registerUnloadingHandler")) { unload.set(args[0]); return null; }

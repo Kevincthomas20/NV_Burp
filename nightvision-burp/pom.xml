@@ -2,17 +2,21 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>local.nightvision</groupId><artifactId>nightvision-burp</artifactId><version>0.3.2</version>
+  <!-- Maven alternative to tools/build.py: compile Java 17 bytecode using UTF-8 source text. -->
   <properties><maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
   <dependencies>
+    <!-- Burp supplies Montoya at runtime; Gson parses API JSON and SnakeYAML reads saved CLI config. -->
     <dependency><groupId>net.portswigger.burp.extensions</groupId><artifactId>montoya-api</artifactId><version>2026.7</version><scope>provided</scope></dependency>
     <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.13.2</version></dependency>
     <dependency><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId><version>2.5</version></dependency>
   </dependencies>
+  <!-- Package the offline demo resource and the bundled libraries' license texts. -->
   <build><resources>
     <resource><directory>src/main/resources</directory></resource>
     <resource><directory>licenses</directory><targetPath>META-INF/licenses</targetPath></resource>
   </resources><plugins>
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version></plugin>
+    <!-- Shade runtime libraries into one loadable JAR, excluding their original signatures/module files. -->
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.1</version>
       <executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration><createDependencyReducedPom>false</createDependencyReducedPom><filters><filter><artifact>*:*</artifact><excludes><exclude>META-INF/*.SF</exclude><exclude>META-INF/*.RSA</exclude><exclude>META-INF/*.DSA</exclude><exclude>module-info.class</exclude><exclude>META-INF/versions/**/module-info.class</exclude></excludes></filter></filters></configuration></execution></executions>
     </plugin>

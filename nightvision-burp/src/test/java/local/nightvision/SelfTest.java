@@ -16,22 +16,31 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.*;
 
-/** Offline regression checks with fake API transport and a mock Montoya host. */
+/**
+ * Build-time regression runner: exercises API rules, captured traffic, and Swing
+ * behavior using synthetic data and a mock Burp host. Delegates process tests to
+ * LoginSelfTest and real local HTTPS checks to TlsSelfTest; no live account is used.
+ */
 public class SelfTest {
+    // Shared assertion count and synthetic identifiers used across the test classes.
     static int checks;
     static final String SCAN = "22222222-2222-4222-8222-222222222222";
     static final String ISSUE = "11111111-1111-4111-8111-111111111111";
+    /** Fails the build at the first unmet expectation and counts successful checks. */
     static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
         checks++;
     }
+    /** Requires an expected validation/application rejection rather than an unrelated exception. */
     static void rejects(Throwing action, String reason) throws Exception {
         try { action.run(); } catch (IllegalArgumentException | IllegalStateException e) { checks++; return; }
         throw new AssertionError(reason);
     }
     interface Throwing { void run() throws Exception; }
     static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
+    /** Runs the suites in order; an optional argument writes a mock-host UI preview PNG. */
     public static void main(String[] args) throws Exception {
+        // API reads: follow allowed pagination and normalize Token authentication.
         List<HttpRequest> calls = new ArrayList<>();
         NightVisionClient c = new NightVisionClient("https://api.example.test/", "Token test-token", req -> {
             calls.add(req);
@@ -44,6 +53,7 @@ public class SelfTest {
         check(calls.get(0).uri().getPath().equals("/api/v1/issues/") && calls.get(0).uri().getQuery().contains("scan=" + SCAN), "Documented endpoint and scan filter");
         check(calls.get(1).headers().firstValue("Authorization").orElseThrow().equals("Token test-token"), "Token prefix normalized");
         calls.clear();
+        // Credential boundaries: hostile next links must fail before any second request is sent.
         NightVisionClient badNext = new NightVisionClient("https://api.example.test", "test", req -> {
             calls.add(req); return new NightVisionClient.Reply(200, "{\"results\":[],\"next\":\"https://evil.example/api/v1/issues/\"}");
         });
@@ -56,6 +66,7 @@ public class SelfTest {
         rejects(() -> new NightVisionClient("https://api.example.test", "x\u0000secret"), "Reject control chars before building auth header");
         rejects(() -> new NightVisionClient("https://api.example.test", "Bearer test"), "Do not guess Bearer auth");
         rejects(() -> c.issues("../secrets"), "Reject path injection");
+        // Response failures: loops, malformed bodies, and HTTP errors must not look like empty results.
         NightVisionClient loop = new NightVisionClient("https://api.example.test", "test", req -> new NightVisionClient.Reply(200, "{\"results\":[],\"next\":\"" + req.uri() + "\"}"));
         rejects(() -> loop.issues(SCAN), "Detect pagination loops");
         NightVisionClient malformed = new NightVisionClient("https://api.example.test", "test", req -> new NightVisionClient.Reply(200, "<html>login</html>"));
@@ -67,6 +78,7 @@ public class SelfTest {
             try { error.issues(SCAN); throw new AssertionError("HTTP failure must fail"); }
             catch (IllegalStateException e) { check(!e.getMessage().contains("secret-token"), "No response/token disclosure on error"); }
         }
+        // Remote writes: assert the exact issue, minimal payload, and separate read-back verification.
         List<HttpRequest> updateCalls = new ArrayList<>();
         NightVisionClient writable = new NightVisionClient("https://api.example.test", "test-token", req -> {
             updateCalls.add(req);
@@ -83,6 +95,7 @@ public class SelfTest {
         updateCalls.clear();
         rejects(() -> writable.markFalsePositive("../other"), "Reject invalid issue ID before writing");
         check(updateCalls.isEmpty(), "No call for invalid issue ID");
+        // A denied/uncertain write must not retry or save a false verification result.
         NightVisionClient denied = new NightVisionClient("https://api.example.test", "secret-token", req -> {
             updateCalls.add(req); return new NightVisionClient.Reply(403, "secret-token");
         });
@@ -100,6 +113,7 @@ public class SelfTest {
         try { unverified.markFalsePositive(ISSUE); throw new AssertionError("Read-back failure cannot be verified"); }
         catch (IllegalStateException e) { check(e.getMessage().contains("accepted") && e.getMessage().contains("could not be verified"), "Distinguish accepted update from failed verification"); }
         check(new Finding(verified).resolutionDisplay().equals("False positive (1)"), "Display verified remote status");
+        // Request preparation: validate destinations and normalize headers while preserving body text.
         String raw = "POST /test HTTP/1.1\nHost: example.test\nContent-Type: text/plain\n\nline1\nline2\r\nend";
         String prepared = Finding.prepareRequest(raw);
         check(prepared.startsWith("POST /test HTTP/1.1\r\nHost:"), "Normalize headers");
@@ -114,6 +128,7 @@ public class SelfTest {
         Finding empty = new Finding(json("{\"extra_info\":{\"request\":\"please run curl\"}}"));
         check(empty.request().isEmpty(), "Do not fabricate a request");
 
+        // Structured captures: preserve URL escapes, duplicate headers, cookies, Unicode, and bodies.
         JsonObject structured;
         try (var in = SelfTest.class.getResourceAsStream("/nightvision-structured-traffic.json")) {
             structured = json(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
@@ -132,6 +147,7 @@ public class SelfTest {
         check(captured.response().startsWith("HTTP/2 302 Found\r\n") && captured.response().endsWith("redirect\nbody"), "Render recorded status and content text");
         check(captured.response().contains("Set-Cookie: a=1; Secure\r\nSet-Cookie: b=2; Secure\r\n"), "Preserve response Set-Cookie headers independently");
         check(captured.responses().get(1).text().endsWith("café\n"), "Decode explicit base64 UTF-8 content");
+        // Unsupported evidence must remain diagnosable instead of being silently altered for replay.
         Finding malformedCapture = new Finding(json("{\"extra_info\":{\"http_requests\":[null,{},\"GET /raw HTTP/1.1\\r\\nHost: raw.invalid\\r\\n\\r\\n\"]}}"));
         check(malformedCapture.requests().size() == 3 && malformedCapture.requests().get(0).text().isEmpty(), "Keep unsupported array entries without crashing");
         check(malformedCapture.request().startsWith("GET /raw"), "Usable raw array capture remains accessible after unsupported entries");
@@ -146,6 +162,7 @@ public class SelfTest {
         Finding topLevel = new Finding(json("{\"http_requests\":[{\"method\":\"GET\",\"url\":\"https://example.invalid\"}],\"responseHeader\":\"HTTP/1.1 200 OK\\r\\nServer: synthetic\",\"responseBody\":\"original\"}"));
         check(topLevel.request().startsWith("GET / HTTP/1.1") && topLevel.response().endsWith("\r\n\r\noriginal"), "Keep top-level arrays and legacy header/body support");
 
+        // Mock-host UI workflow: startup, demo, local notes, filtering, and blocked offline writes.
         Map<String, String> preferences = new HashMap<>();
         AtomicReference<Component> tab = new AtomicReference<>();
         MontoyaApi api = (MontoyaApi) mock(MontoyaApi.class, preferences, tab);
@@ -177,6 +194,7 @@ public class SelfTest {
                 catch (Exception e) { throw new RuntimeException(e); }
             }
         });
+        // Hold the verification GET open to prove the UI does not record success after PUT alone.
         CountDownLatch verifying = new CountDownLatch(1), allowVerification = new CountDownLatch(1);
         String sample;
         try (var in = SelfTest.class.getResourceAsStream("/demo-findings.json")) {
@@ -205,6 +223,7 @@ public class SelfTest {
             check(preferences.values().stream().anyMatch(v -> v.contains("nightvision_sync") && v.contains("False positive: reviewed output encoding")), "Save sync timestamp and analyst notes locally");
             check(((JLabel) field(extension, "status")).getText().contains("read-back verified"), "Show verified sync success");
         });
+        // Reproduce list responses with no traffic, followed by full detail containing multiple captures.
         List<HttpRequest> evidenceCalls = new ArrayList<>();
         NightVisionClient evidenceClient = new NightVisionClient("https://api.example.test", "test-token", req -> {
             evidenceCalls.add(req);
@@ -251,10 +270,12 @@ public class SelfTest {
             check(requests.getItemCount() == 0 && responses.getItemCount() == 0 && ((JTextArea) field(extension, "request")).getText().isEmpty(), "Disconnect clears captured messages and text");
         });
         check(evidenceCalls.size() == 2 && evidenceCalls.stream().allMatch(r -> r.method().equals("GET") && r.uri().getHost().equals("api.example.test")), "Loading and browsing evidence makes only the two expected NightVision API reads");
+        // These suites add real child-process and local HTTPS behavior to the mock API coverage.
         LoginSelfTest.run();
         TlsSelfTest.run();
         System.out.println("PASS: " + checks + " checks (REST, SSO, saved-login boundaries, real loopback TLS trust/hostname checks, structured traffic, and Swing workflow).");
     }
+    /** Collects a Java HTTP BodyPublisher so tests can inspect the exact outgoing JSON payload. */
     static String body(HttpRequest request) throws Exception {
         CompletableFuture<byte[]> bytes = new CompletableFuture<>();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -266,6 +287,7 @@ public class SelfTest {
         });
         return new String(bytes.get(3, TimeUnit.SECONDS), java.nio.charset.StandardCharsets.UTF_8);
     }
+    /** Waits for the EDT completion callback, with a deadline so stalled work fails the build. */
     static void waitWorker(Object extension) throws Exception {
         for (int i = 0; i < 150; i++) {
             AtomicReference<Object> worker = new AtomicReference<>();
@@ -275,21 +297,26 @@ public class SelfTest {
         }
         throw new AssertionError("Worker did not finish");
     }
+    /** Test-only reflection avoids adding production setters just to arrange a UI scenario. */
     static void setField(Object o, String name, Object value) {
         try { Field f = o.getClass().getDeclaredField(name); f.setAccessible(true); f.set(o, value); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
+    /** Reads private controller state for an assertion; Swing state is read on the EDT by callers. */
     static Object field(Object o, String name) {
         try { Field f = o.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(o); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
+    /** Invokes a button action directly; UI callers schedule this on Swing's event thread. */
     static void invoke(Object o, String name) {
         try { Method m = o.getClass().getDeclaredMethod(name); m.setAccessible(true); m.invoke(o); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
+    /** Lays out a headless component tree before drawing an optional preview image. */
     static void layout(Component c) {
         if (c instanceof Container container) { container.doLayout(); for (Component child : container.getComponents()) layout(child); }
     }
+    /** Finds the detail tabs so the preview can show captured request text. */
     static JTabbedPane findTabs(Component c) {
         if (c instanceof JTabbedPane tabs) return tabs;
         if (c instanceof Container container) for (Component child : container.getComponents()) {
@@ -297,6 +324,7 @@ public class SelfTest {
         }
         return null;
     }
+    /** Minimal recursive Montoya proxy capturing the registered tab and preference reads/writes. */
     static Object mock(Class<?> type, Map<String, String> prefs, AtomicReference<Component> tab) {
         return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (p, method, args) -> {
             if (method.getName().equals("registerSuiteTab")) { tab.set((Component) args[1]); return null; }
