@@ -17,17 +17,30 @@ import java.time.Instant;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public final class NightVisionExtension implements BurpExtension {
     private MontoyaApi api;
     private NightVisionClient client;
+    private final Supplier<NightVisionLogin> loginFactory;
+    private final BiFunction<String, String, NightVisionClient> clientFactory;
+    private volatile NightVisionLogin activeLogin;
+    private final JTextField cliPath = new JTextField(32);
+    private final JTextField savedLoginFile = new JTextField(48);
+    private final JTextArea connectionDiagnostics = area(false);
+    private final JTextField caFile = new JTextField(42);
+    private final JCheckBox windowsRoots = new JCheckBox("Use trusted Windows roots", TlsSupport.onWindows());
+    private TlsSupport.Options appliedTls = TlsSupport.Options.defaults();
+    private JButton cancelSignIn;
     private JPanel root;
     private final JTextField origin = new JTextField(NightVisionClient.DEFAULT_ORIGIN, 26);
     private final JPasswordField token = new JPasswordField(22);
     private final JTextField project = new JTextField(22), scanId = new JTextField(28), search = new JTextField(30);
     private final JComboBox<ScanChoice> scans = new JComboBox<>();
-    private final JLabel status = new JLabel("Enter your API token, or use the offline demo.");
+    private final JLabel status = new JLabel("Sign in with SSO, use a saved login, enter an API token, or try the offline demo.");
     private final JTextArea details = area(false), request = area(true), response = area(false), raw = area(false), notes = area(true);
     private final JComboBox<Traffic.Message> capturedRequests = new JComboBox<>(), capturedResponses = new JComboBox<>();
     private final JLabel requestInfo = new JLabel("Select a finding."), responseInfo = new JLabel("Select a finding.");
@@ -45,11 +58,19 @@ public final class NightVisionExtension implements BurpExtension {
     private String namespace = "offline-demo";
     private volatile boolean unloaded;
 
+    public NightVisionExtension() { this(NightVisionLogin::new, null); }
+    NightVisionExtension(Supplier<NightVisionLogin> loginFactory, BiFunction<String, String, NightVisionClient> clientFactory) {
+        this.loginFactory = loginFactory; this.clientFactory = clientFactory;
+    }
+
     @Override public void initialize(MontoyaApi api) {
         this.api = api;
         api.extension().setName("NightVision Finding Validator");
         api.extension().registerUnloadingHandler(() -> {
             unloaded = true;
+            NightVisionLogin login = activeLogin;
+            if (login != null) login.cancel();
+            activeLogin = null;
             SwingWorker<?, ?> running = worker;
             if (running != null) running.cancel(true);
             worker = null;
@@ -60,7 +81,7 @@ public final class NightVisionExtension implements BurpExtension {
             if (unloaded) return;
             buildUi();
             api.userInterface().registerSuiteTab("NightVision", root);
-            api.logging().logToOutput("NightVision validator 0.2.1 loaded. Target requests are opened in Repeater for manual sending. API tokens are not persisted.");
+            api.logging().logToOutput("NightVision validator 0.3.2 loaded. SSO uses the official NightVision CLI and its saved credential. The extension does not persist tokens or passwords. Target requests open in Repeater for manual sending.");
         });
     }
     private static JTextArea area(boolean editable) {
@@ -81,6 +102,22 @@ public final class NightVisionExtension implements BurpExtension {
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         JPanel top = new JPanel(); top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
         top.add(row(new JLabel("API origin"), origin, new JLabel("API token (memory only)"), token));
+        String configured = api.persistence().preferences().getString("nightvision.cli.path");
+        if (configured == null || configured.isBlank()) configured = System.getenv("NIGHTVISION_CLI_PATH");
+        cliPath.setText(configured == null || configured.isBlank() ? "nightvision" : configured);
+        cancelSignIn = new JButton("Cancel sign-in"); cancelSignIn.setEnabled(false);
+        cancelSignIn.addActionListener(e -> cancelSignIn());
+        top.add(row(new JLabel("NightVision CLI"), cliPath, button("Browse…", this::browseCli),
+            button("Sign in with SSO", () -> connectLogin(true)), button("Use saved login", () -> connectLogin(false)), cancelSignIn));
+        String savedPath = api.persistence().preferences().getString("nightvision.login.file");
+        savedLoginFile.setText(savedPath == null ? "" : savedPath);
+        savedLoginFile.setToolTipText("Optional file used by Use saved login; leave blank to find current CLI config automatically.");
+        top.add(row(new JLabel("Saved login file (optional)"), savedLoginFile, button("Browse login file", this::browseLoginFile), new JLabel("Blank = auto-detect CLI config")));
+        String ca = api.persistence().preferences().getString("nightvision.tls.ca.file"); caFile.setText(ca == null ? "" : ca);
+        String useRoots = api.persistence().preferences().getString("nightvision.tls.windows.roots");
+        if (useRoots != null) windowsRoots.setSelected(Boolean.parseBoolean(useRoots) && TlsSupport.onWindows());
+        windowsRoots.setEnabled(TlsSupport.onWindows());
+        top.add(row(new JLabel("Additional trusted CA (optional)"), caFile, button("Browse CA", this::browseCa), windowsRoots));
         top.add(row(new JLabel("Project UUID (optional)"), project,
             button("Connect / load scans", this::connect), button("Disconnect", this::disconnect), button("Offline demo", this::demo)));
         scans.setPreferredSize(new Dimension(650, 27));
@@ -108,6 +145,8 @@ public final class NightVisionExtension implements BurpExtension {
         tabs.addTab("Request (editable)", trafficPanel(true));
         tabs.addTab("Original response", trafficPanel(false));
         tabs.addTab("Full finding JSON", new JScrollPane(raw));
+        connectionDiagnostics.setText("Use Sign in with SSO or Use saved login to collect connection diagnostics. Credential contents and raw CLI output are omitted.");
+        tabs.addTab("Connection diagnostics", new JScrollPane(connectionDiagnostics));
         JScrollPane tablePane = new JScrollPane(table);
         tablePane.setColumnHeaderView(table.getTableHeader());
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tablePane, tabs);
@@ -179,7 +218,8 @@ public final class NightVisionExtension implements BurpExtension {
     }
     private <T> void background(String message, Callable<T> work, Consumer<T> done) {
         if (worker != null && !worker.isDone()) return;
-        buttons.forEach(b -> b.setEnabled(false)); origin.setEnabled(false); token.setEnabled(false); project.setEnabled(false); scanId.setEnabled(false); scans.setEnabled(false);
+        buttons.forEach(b -> b.setEnabled(false)); origin.setEnabled(false); token.setEnabled(false); project.setEnabled(false); scanId.setEnabled(false); scans.setEnabled(false); cliPath.setEnabled(false); savedLoginFile.setEnabled(false);
+        cancelSignIn.setEnabled(activeLogin != null); caFile.setEnabled(false); windowsRoots.setEnabled(false);
         table.setEnabled(false); search.setEnabled(false); notes.setEnabled(false); verdict.setEnabled(false); request.setEnabled(false); destination.setEnabled(false);
         capturedRequests.setEnabled(false); capturedResponses.setEnabled(false);
         status.setText(message);
@@ -187,15 +227,24 @@ public final class NightVisionExtension implements BurpExtension {
             @Override protected T doInBackground() throws Exception { return work.call(); }
             @Override protected void done() {
                 if (unloaded) return;
+                String failureDetails = "";
                 try { done.accept(get()); }
                 catch (Exception e) {
                     Throwable cause = e.getCause() == null ? e : e.getCause();
+                    if (cause instanceof CancellationException) { status.setText("Sign-in canceled. The browser session and any CLI-saved login are kept."); return; }
                     String text = cause instanceof IllegalArgumentException || cause instanceof IllegalStateException
                         ? cause.getMessage() : "Connection failed (" + cause.getClass().getSimpleName() + "). Check network access and TLS trust.";
+                    if (cause instanceof javax.net.ssl.SSLException ssl) text = TlsSupport.reason(ssl) + " See Connection diagnostics.";
+                    failureDetails = TlsSupport.diagnostics(cause, appliedTls);
                     error(text);
                 } finally {
                     worker = null;
-                    buttons.forEach(b -> b.setEnabled(true)); origin.setEnabled(true); token.setEnabled(true); project.setEnabled(true); scanId.setEnabled(true); scans.setEnabled(true);
+                    connectionDiagnostics.setText((activeLogin == null ? "" : activeLogin.diagnostics() + "\n")
+                        + "API connection settings\n" + TlsSupport.runtimeReport(appliedTls) + failureDetails);
+                    connectionDiagnostics.setCaretPosition(0);
+                    activeLogin = null; cancelSignIn.setEnabled(false);
+                    buttons.forEach(b -> b.setEnabled(true)); origin.setEnabled(true); token.setEnabled(true); project.setEnabled(true); scanId.setEnabled(true); scans.setEnabled(true); cliPath.setEnabled(true); savedLoginFile.setEnabled(true);
+                    caFile.setEnabled(true); windowsRoots.setEnabled(TlsSupport.onWindows());
                     table.setEnabled(true); search.setEnabled(true); notes.setEnabled(true); verdict.setEnabled(true); request.setEnabled(true); destination.setEnabled(true);
                     capturedRequests.setEnabled(capturedRequests.getItemCount() > 1); capturedResponses.setEnabled(capturedResponses.getItemCount() > 1);
                 }
@@ -205,24 +254,102 @@ public final class NightVisionExtension implements BurpExtension {
     }
     private void connect() {
         char[] chars = token.getPassword();
-        final NightVisionClient pending;
-        String p = project.getText().trim();
-        try { pending = new NightVisionClient(origin.getText(), new String(chars)); }
+        String p = project.getText().trim(), base = origin.getText().trim();
+        final String credential;
+        try { NightVisionClient.apiOrigin(base); credential = new String(chars); if (credential.isBlank()) throw new IllegalArgumentException("Enter an API token or use an SSO login button."); }
         catch (RuntimeException e) { error(e.getMessage()); return; }
         finally { Arrays.fill(chars, '\0'); }
+        TlsSupport.Options tls = tlsOptions();
         disconnectState();
-        background("Connecting and loading scans…", () -> pending.scans(p), rows -> {
-            client = pending; namespace = pending.origin();
-            scans.removeAllItems();
-            for (JsonObject s : rows) scans.addItem(new ScanChoice(Finding.s(s, "id"),
-                Finding.s(s, "target_name") + " | " + Finding.s(s, "status_value") + " | " + Finding.s(s, "created_at") + " | " + Finding.s(s, "id")));
-            status.setText("Connected. " + rows.size() + " scans loaded. Select a scan or paste a scan UUID.");
-        });
+        background("Connecting and loading scans…", () -> {
+            NightVisionClient pending = createClient(base, credential, tls);
+            return new LoginConnection(pending, pending.scans(p), "Connected using API token.");
+        }, session -> connected(session.client(), session.scans(), session.message()));
     }
+    private NightVisionClient createClient(String base, String credential, TlsSupport.Options tls) {
+        return clientFactory == null ? new NightVisionClient(base, credential, tls) : clientFactory.apply(base, credential);
+    }
+    private TlsSupport.Options tlsOptions() {
+        appliedTls = new TlsSupport.Options(caFile.getText(), windowsRoots.isSelected());
+        try {
+            if (!appliedTls.caFile().isBlank() || api.persistence().preferences().getString("nightvision.tls.ca.file") != null)
+                api.persistence().preferences().setString("nightvision.tls.ca.file", appliedTls.caFile());
+            if (appliedTls.windowsRoots() != TlsSupport.onWindows() || api.persistence().preferences().getString("nightvision.tls.windows.roots") != null)
+                api.persistence().preferences().setString("nightvision.tls.windows.roots", Boolean.toString(appliedTls.windowsRoots()));
+        } catch (RuntimeException ignored) {}
+        return appliedTls;
+    }
+    private void browseCa() {
+        JFileChooser picker = new JFileChooser(); picker.setDialogTitle("Select your IT-provided trusted CA certificate (PEM or DER)");
+        if (picker.showOpenDialog(root) == JFileChooser.APPROVE_OPTION) caFile.setText(picker.getSelectedFile().getAbsolutePath());
+    }
+    private void connected(NightVisionClient pending, List<JsonObject> rows, String message) {
+        client = pending; namespace = pending.origin(); scans.removeAllItems();
+        for (JsonObject s : rows) scans.addItem(new ScanChoice(Finding.s(s, "id"),
+            Finding.s(s, "target_name") + " | " + Finding.s(s, "status_value") + " | " + Finding.s(s, "created_at") + " | " + Finding.s(s, "id")));
+        status.setText(message + " " + rows.size() + " scans loaded. Select a scan or paste a scan UUID.");
+    }
+    private void browseCli() {
+        JFileChooser picker = new JFileChooser(); picker.setDialogTitle("Select the official NightVision CLI executable (nightvision or nightvision.exe)");
+        if (picker.showOpenDialog(root) == JFileChooser.APPROVE_OPTION) {
+            cliPath.setText(picker.getSelectedFile().getAbsolutePath()); rememberCliPath();
+        }
+    }
+    private void rememberCliPath() {
+        try { api.persistence().preferences().setString("nightvision.cli.path", cliPath.getText().trim()); }
+        catch (RuntimeException ignored) { /* An unavailable preference store does not prevent this sign-in. */ }
+    }
+    private void browseLoginFile() {
+        JFileChooser picker = new JFileChooser(); picker.setDialogTitle("Select NightVision CLI config (nightvision.yml) or legacy token file");
+        if (picker.showOpenDialog(root) == JFileChooser.APPROVE_OPTION) {
+            savedLoginFile.setText(picker.getSelectedFile().getAbsolutePath());
+            try { api.persistence().preferences().setString("nightvision.login.file", savedLoginFile.getText()); } catch (RuntimeException ignored) {}
+        }
+    }
+    private void connectLogin(boolean browser) {
+        if (worker != null) return;
+        String p = project.getText().trim(); String executable = cliPath.getText().trim(); String selectedFile = savedLoginFile.getText().trim();
+        try {
+            NightVisionLogin.requireProductionOrigin(origin.getText());
+            if (!p.isBlank()) NightVisionClient.id(p);
+            if (browser && executable.isBlank()) throw new IllegalArgumentException("Select the NightVision CLI executable using Browse.");
+        } catch (RuntimeException e) { error(e.getMessage()); return; }
+        NightVisionLogin login = loginFactory.get();
+        TlsSupport.Options tls = tlsOptions();
+        disconnectState(); token.setText(""); activeLogin = login;
+        if (browser) rememberCliPath();
+        else try {
+            if (!selectedFile.isBlank() || api.persistence().preferences().getString("nightvision.login.file") != null)
+                api.persistence().preferences().setString("nightvision.login.file", selectedFile);
+        } catch (RuntimeException ignored) {}
+        background(browser ? "Complete NightVision SSO in your browser. Sign-in waits up to five minutes…" : "Checking your saved NightVision login and loading scans…", () -> {
+            String credential = browser ? login.signIn(executable) : login.savedToken(selectedFile);
+            login.checkCancelled();
+            NightVisionClient pending = createClient(NightVisionClient.DEFAULT_ORIGIN, credential, tls);
+            try {
+                JsonObject user = pending.currentUser(); login.checkCancelled();
+                List<JsonObject> rows = pending.scans(p); login.checkCancelled();
+                String email = Finding.s(user, "email");
+                return new LoginConnection(pending, rows, email.isBlank() ? "Connected using NightVision CLI login." : "Connected as " + email + " using NightVision CLI login.");
+            } catch (NightVisionClient.ApiException e) {
+                if (e.status() == 401) throw new IllegalStateException("NightVision rejected the saved login (HTTP 401). Click Sign in with SSO to authenticate again.");
+                if (e.status() == 403) throw new IllegalStateException("NightVision denied access (HTTP 403). Check your account permissions; sign in again if you need a different account.");
+                throw e;
+            }
+        }, session -> { login.checkCancelled(); connected(session.client(), session.scans(), session.message()); });
+    }
+    private void cancelSignIn() {
+        NightVisionLogin login = activeLogin;
+        if (login == null) return;
+        login.cancel();
+        SwingWorker<?, ?> running = worker;
+        if (running != null) running.cancel(true);
+    }
+    private record LoginConnection(NightVisionClient client, List<JsonObject> scans, String message) {}
     private void disconnectState() {
         client = null; namespace = "offline-demo"; scans.removeAllItems(); scanId.setText(""); setFindings(List.of());
     }
-    private void disconnect() { disconnectState(); token.setText(""); status.setText("Disconnected. API token cleared."); }
+    private void disconnect() { disconnectState(); token.setText(""); status.setText("Disconnected. In-memory credential cleared. Saved CLI login is kept."); }
     private void loadFindings() {
         NightVisionClient c = client;
         if (c == null) { error("Connect to NightVision first."); return; }

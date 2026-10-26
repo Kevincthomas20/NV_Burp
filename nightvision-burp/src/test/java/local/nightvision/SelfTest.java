@@ -251,7 +251,9 @@ public class SelfTest {
             check(requests.getItemCount() == 0 && responses.getItemCount() == 0 && ((JTextArea) field(extension, "request")).getText().isEmpty(), "Disconnect clears captured messages and text");
         });
         check(evidenceCalls.size() == 2 && evidenceCalls.stream().allMatch(r -> r.method().equals("GET") && r.uri().getHost().equals("api.example.test")), "Loading and browsing evidence makes only the two expected NightVision API reads");
-        System.out.println("PASS: " + checks + " offline checks (REST, credential boundaries, structured and raw captures, body preservation, explicit updates, and Swing workflow).");
+        LoginSelfTest.run();
+        TlsSelfTest.run();
+        System.out.println("PASS: " + checks + " checks (REST, SSO, saved-login boundaries, real loopback TLS trust/hostname checks, structured traffic, and Swing workflow).");
     }
     static String body(HttpRequest request) throws Exception {
         CompletableFuture<byte[]> bytes = new CompletableFuture<>();

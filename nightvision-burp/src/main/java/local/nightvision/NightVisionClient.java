@@ -7,6 +7,7 @@ import java.net.http.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import javax.net.ssl.SSLException;
 
 /** REST client with explicit, single-issue false-positive updates. No target traffic. */
 public final class NightVisionClient {
@@ -21,17 +22,13 @@ public final class NightVisionClient {
     private final Transport transport;
 
     public NightVisionClient(String base, String token) {
-        this(base, token, networkTransport());
+        this(base, token, networkTransport(TlsSupport.Options.defaults()));
+    }
+    public NightVisionClient(String base, String token, TlsSupport.Options tls) {
+        this(base, token, networkTransport(tls));
     }
     NightVisionClient(String base, String token, Transport transport) {
-        URI u;
-        try { u = URI.create(base.trim()); }
-        catch (RuntimeException e) { throw new IllegalArgumentException("Enter a valid HTTPS API origin."); }
-        if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null || u.getRawUserInfo() != null
-                || u.getRawQuery() != null || u.getFragment() != null || u.getPort() == 0 || u.getPort() > 65535
-                || !(u.getPath().isEmpty() || u.getPath().equals("/")))
-            throw new IllegalArgumentException("API origin must be HTTPS, with no path, query, or credentials.");
-        this.origin = URI.create("https://" + u.getRawAuthority());
+        this.origin = apiOrigin(base);
         String t = token.trim();
         if (t.regionMatches(true, 0, "Token ", 0, 6)) t = t.substring(6).trim();
         if (t.isBlank() || t.chars().anyMatch(c -> c < 33 || c > 126))
@@ -39,19 +36,40 @@ public final class NightVisionClient {
         authorization = "Token " + t;
         this.transport = transport;
     }
-    private static Transport networkTransport() {
+    static URI apiOrigin(String base) {
+        URI u;
+        try { u = URI.create(base.trim()); }
+        catch (RuntimeException e) { throw new IllegalArgumentException("Enter a valid HTTPS API origin."); }
+        if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null || u.getRawUserInfo() != null
+                || u.getRawQuery() != null || u.getFragment() != null || u.getPort() == 0 || u.getPort() > 65535
+                || !(u.getPath().isEmpty() || u.getPath().equals("/")))
+            throw new IllegalArgumentException("API origin must be HTTPS, with no path, query, or credentials.");
+        return URI.create("https://" + u.getRawAuthority());
+    }
+    private static Transport networkTransport(TlsSupport.Options options) {
+        TlsSupport.Configuration tls = TlsSupport.build(options);
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
+                .sslContext(tls.context()).sslParameters(TlsSupport.httpsParameters())
                 .followRedirects(HttpClient.Redirect.NEVER).build();
         return request -> {
+            try {
             HttpResponse<InputStream> r = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream in = r.body()) {
                 byte[] bytes = in.readNBytes(MAX_BODY + 1);
                 if (bytes.length > MAX_BODY) throw new IllegalStateException("API response exceeds 20 MiB; narrow your scan selection.");
                 return new Reply(r.statusCode(), new String(bytes, StandardCharsets.UTF_8));
             }
+            } catch (SSLException e) { throw TlsSupport.connectionFailure(e, tls.report()); }
         };
     }
     public String origin() { return origin.toString(); }
+    public JsonObject currentUser() throws Exception {
+        JsonObject reply = get(origin.resolve("/api/v1/user/me/"));
+        JsonObject user = Finding.object(reply, "user");
+        if (user.size() == 0) user = reply;
+        if (Finding.s(user, "id").isBlank()) throw new IllegalStateException("NightVision login could not be verified: the user response has no ID.");
+        return user;
+    }
     public List<JsonObject> scans(String project) throws Exception {
         String path = "/api/v1/scans/?page_size=100&order=-created_at";
         if (!project.isBlank()) path += "&project=" + id(project);
@@ -71,7 +89,7 @@ public final class NightVisionClient {
         } catch (Exception e) {
             String detail = e instanceof IllegalStateException ? " " + e.getMessage() : "";
             throw new IllegalStateException("The NightVision update was not confirmed." + detail
-                + " Fetch the full finding before retrying; an interrupted request may still have been applied.");
+                + " Fetch the full finding before retrying; an interrupted request may still have been applied.", e);
         }
         try {
             JsonObject refreshed = issue(selectedId);
@@ -81,7 +99,7 @@ public final class NightVisionClient {
             return refreshed;
         } catch (Exception e) {
             throw new IllegalStateException("NightVision accepted the update, but its saved resolution could not be verified."
-                + " Fetch the full finding to check its current status before retrying.");
+                + " Fetch the full finding to check its current status before retrying.", e);
         }
     }
     static String id(String id) {
@@ -123,7 +141,7 @@ public final class NightVisionClient {
     private JsonObject exchange(URI u, JsonObject update) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(u).timeout(Duration.ofSeconds(45))
                 .header("Authorization", authorization).header("Accept", "application/json")
-                .header("User-Agent", "NightVision-Burp/0.2.1");
+                .header("User-Agent", "NightVision-Burp/0.3.2");
         if (update == null) builder.GET();
         else builder.header("Content-Type", "application/json").PUT(HttpRequest.BodyPublishers.ofString(update.toString(), StandardCharsets.UTF_8));
         Reply r = transport.send(builder.build());
@@ -135,9 +153,14 @@ public final class NightVisionClient {
                 case 429 -> "Rate limited; wait before retrying.";
                 default -> "Check connectivity and the NightVision service. Redirects are disabled.";
             };
-            throw new IllegalStateException("NightVision returned HTTP " + r.status() + ". " + hint);
+            throw new ApiException(r.status(), "NightVision returned HTTP " + r.status() + ". " + hint);
         }
         try { return JsonParser.parseString(r.body()).getAsJsonObject(); }
         catch (RuntimeException e) { throw new IllegalStateException("NightVision returned invalid JSON."); }
+    }
+    public static final class ApiException extends IllegalStateException {
+        private final int status;
+        ApiException(int status, String message) { super(message); this.status = status; }
+        public int status() { return status; }
     }
 }

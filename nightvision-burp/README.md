@@ -1,11 +1,11 @@
 # NightVision Finding Validator for Burp Suite
 
-**Extension version:** 0.2.1  
+**Extension version:** 0.3.2  
 **Documentation updated:** October 26, 2026
 
 NightVision Finding Validator brings NightVision scan findings into Burp Suite for manual review. Connect to NightVision, select a scan, examine the evidence, open a finding's HTTP request in Repeater, and record your assessment. When you determine that a finding is a false positive, you can explicitly update its resolution in NightVision and verify that the change saved.
 
-The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required.
+The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.3.2 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
 
 ## Contents
 
@@ -37,7 +37,15 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Feature or control | What it does |
 | --- | --- |
 | API origin | Selects the NightVision API server used when you connect. |
-| API token (memory only) | Supplies the token used to authenticate NightVision API requests. |
+| API token (memory only) | Supplies a manually entered token used for API requests. SSO does not fill this field. |
+| NightVision CLI / Browse | Sets the official CLI executable; remembers its path in Burp preferences. |
+| Saved login file / Browse login file | Optionally selects the saved config used by Use saved login; blank enables auto-detection. The path is remembered without copying credentials. |
+| Connection diagnostics | Shows login paths, Java runtime/trust settings, CLI exit code, and classified TLS failures; omits credentials and raw process/exception messages. |
+| Additional trusted CA / Browse CA | Adds a selected IT-provided CA certificate file to this extension’s API client trust. |
+| Use trusted Windows roots | Adds available native Windows ROOT stores alongside JVM trust; enabled by default on Windows. |
+| Sign in with SSO | Runs the official CLI browser login, reads its saved credential after success, verifies the account, and loads scans. |
+| Use saved login | Reads the current OS user’s saved CLI credential, verifies it, and loads scans without launching a login process. |
+| Cancel sign-in | Stops the pending sign-in/connection attempt and CLI listener. Keeps the browser and saved login. |
 | Project UUID (optional) | Limits the scan list returned when connecting. |
 | Connect / load scans | Establishes the API connection and loads accessible scans. |
 | Disconnect | Drops the connection, clears the token field, and clears loaded scans and findings. |
@@ -72,12 +80,13 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Burp Suite | A desktop Community or Professional installation with Montoya API support. |
 | API dependency | Compiled against Montoya API 2026.7. Compatibility with your installed Burp version still needs verification. |
 | Java runtime | Targets Java 17 bytecode. Burp must run on Java 17 or later; a compatible Burp installation's bundled runtime can provide this. |
-| NightVision access | An API token with access to the scans and issues you want to review. |
+| NightVision access | A NightVision account with access to the scans and issues, using CLI SSO login or a manual API token. |
+| SSO browser login | The current official NightVision CLI installed on the same machine and OS account as Burp, with an available desktop browser. |
 | Remote updates | Permission to update issues is also required for the false-positive action. |
 | Network access | HTTPS access from the Burp machine to the configured NightVision API. Access to the target application is needed separately for Repeater testing. |
 | Desktop environment | A suitable Windows or Linux desktop capable of running Burp. The extension does not use distribution-specific services. |
 
-The extension uses no Professional-only Scanner features. Loading the supplied JAR does not require Node.js, Jython, Python, Maven, an application server, or a separate database.
+The extension uses no Professional-only Scanner features. Loading the supplied JAR does not require Node.js, Jython, Python, Maven, an application server, or a separate database. SSO browser login requires the official NightVision CLI; manual-token mode and offline demo do not.
 
 A live NightVision tenant and running Burp installation were not available during development. Compilation and offline checks passed; end-to-end compatibility remains to be tested in your environment.
 
@@ -89,10 +98,10 @@ Rebuilding requires JDK 17 or 21 and either Python 3.8 or later for the included
 
 ### Install the prebuilt JAR
 
-1. Extract `nightvision-burp-extension-v0.2.1.zip`.
+1. Extract `nightvision-burp-extension-v0.3.2.zip`.
 2. Open Burp Suite and go to **Extensions → Installed → Add**.
 3. Choose **Java** as the extension type.
-4. Select `nightvision-burp/dist/nightvision-burp-0.2.1.jar` from the extracted package.
+4. Select `nightvision-burp/dist/nightvision-burp-0.3.2.jar` from the extracted package.
 5. Click **Next** and inspect the extension's **Output** and **Errors** tabs.
 6. Close the installer and open the new **NightVision** tab.
 
@@ -109,7 +118,7 @@ Avoid running two versions simultaneously. Existing annotations can be retrieved
 
 ### Unload the extension
 
-Unload or remove it through **Extensions → Installed**. Unloading cancels the active background worker, clears the token field, and drops the connection reference.
+Unload or remove it through **Extensions → Installed**. Unloading cancels the active background worker, stops an extension-launched CLI login listener, clears the token field, and drops the connection reference. It does not close the browser or remove the CLI’s saved credential.
 
 Unloading does not delete saved annotations, exports, or existing Repeater requests. An API write already received by NightVision may still complete even if the extension is unloaded while the operation is in progress.
 
@@ -126,7 +135,7 @@ The sample uses `example.invalid` and is not a working test application. The ins
 
 ### Review a real finding
 
-1. Enter your NightVision API token and click **Connect / load scans**.
+1. Click **Sign in with SSO** and finish your normal NightVision browser sign-in. Select the installed CLI executable using **Browse** if needed. For later sessions, use **Use saved login**. Alternatively, enter an API token and click **Connect / load scans**.
 2. Choose a scan and click **Load findings**.
 3. Select a finding and click **Fetch full finding** when you need current details.
 4. Inspect the request, original response, and evidence.
@@ -157,6 +166,67 @@ Enter the HTTPS origin for your actual deployment: scheme, host, and optional po
 
 This field identifies NightVision's API service. Your target application's service is configured separately through **Destination URL**.
 
+### Sign in with SSO
+
+Install the current official [NightVision CLI](https://docs.nightviz.ai/welcome/tutorials-and-guides/installing-the-cli/) on the same desktop as Burp. Leave **API origin** set to `https://api.nightvision.net`.
+
+1. In **NightVision CLI**, enter the executable path or use **Browse**. `nightvision` works when the executable is on Burp’s inherited PATH. On Windows, select the actual `nightvision.exe` file, without surrounding quotes or command arguments.
+2. Click **Sign in with SSO**.
+3. In the browser opened by NightVision, choose your organization’s SSO option and complete any normal MFA prompts.
+4. When the CLI finishes successfully, the extension reads the credential saved by the CLI, calls `GET /api/v1/user/me/` to verify it, and loads scans. The status line shows the account email when provided.
+
+The extension runs the executable directly, with separate arguments:
+
+```text
+nightvision login --api-url https://api.nightvision.net/api/v1/
+```
+
+It does not collect your SSO password, implement an identity-provider login page, embed a browser, or ask you to copy an authorization code. Browser login remains owned by NightVision’s official CLI. CLI stdout/stderr are drained together; at most 64 KiB is examined in process memory to classify failures. The extension records only the exit code and fixed explanations, not raw output or credentials. The extension also removes inherited `NIGHTVISION_TOKEN` and `NIGHTVISION_API_URL` variables from this subprocess so they cannot bypass or redirect the requested login.
+
+The extension waits up to five minutes and stops the login process on timeout. It does not pass `--timeout`, so older CLI releases without that option can be used. **Cancel sign-in** cancels the pending connection and stops the CLI process, freeing its login listener. Your browser remains open. A login already completed in the browser or saved by the CLI may remain available; cancellation is not revocation or account logout. The same applies when the extension is unloaded during sign-in.
+
+If the CLI cannot open a browser from Burp, run `nightvision login` in a normal desktop terminal, complete SSO, and click **Use saved login** in Burp. If the CLI fails, inspect **Connection diagnostics** for its exit code and fixed error hint.
+
+### Use saved login
+
+The current CLI stores its platform token in a top-level `token` field in its configuration file. Version 0.3.0 incorrectly assumed the CLI always used a separate plain token file; 0.3.1 corrects that assumption:
+
+| Platform | Saved credential location |
+| --- | --- |
+| Windows | `%USERPROFILE%\.nightvision\nightvision.yml` |
+| Linux/macOS | `~/.nightvision/nightvision.yml` |
+
+Auto-detection checks `nightvision.yml`, `nightvision.yaml`, and `nightvision.json` before the legacy `.nightvision/token` file under the home directory reported by Java and available OS home hints. The extension does not recursively search your filesystem. YAML and JSON must have a top-level text `token`; unrelated, nested, malformed, ambiguous, or incompatible API configuration is not treated as a credential. The parser uses SafeConstructor with bounded input, rejects duplicate keys, and does not instantiate custom YAML tags. Existing config files are never edited.
+
+If detection fails, click **Browse login file** and select the config actually used by your terminal login, then click **Use saved login**. The optional field applies to **Use saved login** only; a new **Sign in with SSO** reads the CLI’s normal saved locations. An explicitly chosen file does not fall back to another credential if it is missing.
+
+**Connection diagnostics** lists checked paths and the loaded file, with credential values omitted. It also shows CLI exit status and fixed failure explanations. Share this diagnostic view for troubleshooting, rather than the contents of your config file.
+
+Click **Use saved login** after restarting Burp to reuse that credential without a new browser login. No CLI executable is launched by this action. The extension still verifies the account and loads scans; it does not treat a file’s presence as proof that the login is valid. A missing or rejected credential produces guidance to sign in again. A service or network failure is not reported as an expired credential.
+
+The API token field stays blank for SSO and saved-login connections. The CLI executable path and any explicit saved-login file path are remembered in Burp preferences, while the extension does not write the credential there. Saved-login reuse is explicit: the extension does not read the token or make an automatic connection on startup.
+
+SSO and saved-login actions connect only to NightVision’s production API at `https://api.nightvision.net`. Other configured origins remain available through manual-token mode. This keeps a production credential from being sent to another origin. Run Burp as the same OS user who completed CLI login; for example, a Windows Burp process does not use a Linux/WSL user’s separate token file.
+
+### API TLS trust and company certificates
+
+Browser sign-in and CLI login can succeed while the Java API connection fails with `SSLHandshakeException`. They use different TLS implementations and may use different trusted-certificate stores. A company TLS-inspection gateway can be one cause, but the exception can also mean an expired certificate, a hostname mismatch, or a protocol problem.
+
+Version 0.3.2 retains Java’s default trusted roots and adds these API-specific settings:
+
+| Control | Behavior |
+| --- | --- |
+| Use trusted Windows roots | Enabled by default on Windows. Tries `Windows-ROOT` and `Windows-ROOT-LOCALMACHINE` when the running JVM supports them. Unavailable stores are reported in TLS failure diagnostics; default JVM trust remains available. Disabled on other operating systems. |
+| Additional trusted CA (optional) | Use **Browse CA** to select your trusted company/issuer CA in PEM or DER form, then reconnect. Accepts 1–32 currently valid CA certificates, up to 2 MiB total; leaf server certificates are rejected. The selected file is read in the background and is never modified. |
+
+After changing either setting, click **Use saved login** or reconnect with a manual API token. Settings do not alter an already-created connection. The CA path and checkbox preference are remembered without copying credentials into preferences.
+
+TLS changes apply only to this extension’s API clients. They do not modify the global Java trust store, Burp’s own network settings, the CLI, your browser, or Repeater. Certificate-chain validation and HTTPS hostname checks remain enabled. An additional CA adds trust; it does not replace the JVM’s trusted roots.
+
+If your workplace uses TLS inspection, select the CA certificate supplied or approved by your IT team. If Windows already trusts that CA and the JVM exposes the native store, the Windows-roots option can be sufficient. Use **Connection diagnostics** after a failure: it distinguishes certificate-chain, hostname, validity-date, and protocol/handshake failures. It includes Java version/home, the configured trust-store path, native store availability, selected CA fingerprints when loaded, and cause class names, while omitting credential values and raw exception messages. These diagnostics do not prove the cause before the connection is tested in your environment.
+
+See **TLS-SETUP.md** for the short recovery workflow.
+
 ### API token
 
 Generate a token through your NightVision account's token-management interface and paste it into **API token (memory only)**. The extension accepts a raw token or a token preceded by `Token `, then authenticates as:
@@ -165,7 +235,7 @@ Generate a token through your NightVision account's token-management interface a
 Authorization: Token <your-api-token>
 ```
 
-JWT / `Bearer` login and interactive SSO login are not implemented. The token grants only the account's permitted access. It is separate from the cookies or authorization headers needed to authenticate your target application in Repeater.
+Direct JWT / `Bearer` entry is not implemented. Browser SSO uses the official CLI credential as described above. The token grants only the account's permitted access. It is separate from the cookies or authorization headers needed to authenticate your target application in Repeater.
 
 ### Project UUID (optional)
 
@@ -183,7 +253,7 @@ Editing the origin, token, or project field alone does not reconfigure an existi
 
 Click **Disconnect** to clear the token field, drop the connection, and clear loaded scans, the selected scan UUID, and findings. Saved annotations, exports, and existing Repeater tabs remain.
 
-The extension does not persist connection settings for automatic reconnection. Enter the connection details again after reloading the extension.
+Disconnect does not delete or revoke the CLI’s saved credential and does not log out the browser. After reloading the extension, use **Use saved login**, or enter a manual API token again. Only non-secret executable, config/CA file paths, and TLS options are remembered by the extension; it does not automatically connect.
 
 ## 6. Select scans and load findings
 
@@ -523,7 +593,10 @@ The Java extension runs inside Burp, persists annotations in Burp preferences, a
 
 | Data | Where it is held or saved | Sent to NightVision? |
 | --- | --- | --- |
-| API token | Process memory and password field while connected. | Yes, in the API Authorization header. |
+| Manual API token | Process memory and password field while connected. | Yes, in the API Authorization header. |
+| SSO/CLI credential | Saved by the official CLI in the OS user’s `.nightvision/nightvision.yml` or a supported legacy/config file; the extension reads it into process memory only after an explicit login action. | Yes, to the production NightVision API in the Authorization header. |
+| CLI executable, saved-login and CA file paths, Windows-roots option | Burp extension preferences; contain no credential values. | No. |
+| Connection diagnostics | Extension memory: local paths, CLI exit status, Java/TLS settings and failure classification; no credential contents or raw process/exception messages. | No. |
 | Loaded scans and issues | Extension memory. | Retrieved from NightVision. |
 | Original request and response | Loaded record and text views. | Not uploaded by the update action. |
 | Edited request | Temporary editor state; copied to Repeater when requested. | No. |
@@ -534,7 +607,7 @@ The Java extension runs inside Burp, persists annotations in Burp preferences, a
 
 ### Credentials and preferences
 
-The extension does not write the API token to its JAR, annotation preferences, or exports. Disconnecting, loading the demo, and unloading clear the field and drop the connection reference. Java does not guarantee immediate erasure of immutable token strings from memory.
+The extension does not write the API token to its JAR, annotation preferences, or exports. Disconnecting, loading the demo, and unloading clear the field and drop the connection reference. Java does not guarantee immediate erasure of immutable token strings from memory. SSO login delegates credential saving to the official CLI; the extension reads that file but does not create, modify, delete, encrypt, or revoke it. Disconnect and cancel leave this shared credential in place. These credentials can be reused by other NightVision tools running as the same OS user.
 
 Local annotations use Burp's standard extension preferences. This extension adds no separate encryption layer or database. Exact physical preference paths depend on the host implementation. Keep unnecessary secrets out of notes.
 
@@ -544,15 +617,15 @@ Requests opened in Repeater come under Burp's own data handling and project stat
 
 ### HTTPS and redirects
 
-API calls use Java's HTTP client with normal certificate validation. Redirects are disabled. Pagination must remain on the configured HTTPS origin, port, and collection path before the token is attached.
+API calls use Java's HTTP client with certificate-chain and HTTPS hostname validation. JVM trust is retained, available Windows roots can be added, and an optional CA file can supply an additional trusted issuer for API connections. Redirects are disabled. Pagination must remain on the configured HTTPS origin, port, and collection path before the token is attached.
 
 Operational errors are summarized without displaying raw server response bodies. The extension's startup log message contains no credentials. Burp's own logs and project handling are separate.
 
 ### Proxy behavior
 
-NightVision API calls do not use Burp's HTTP engine, Proxy interception, or Burp's upstream proxy settings. They use the Java client directly. This release has no extension-level proxy or custom trust-store controls.
+NightVision API calls do not use Burp's HTTP engine, Proxy interception, or Burp's upstream proxy settings. They use the Java client directly. This release offers API-specific Windows-root and additional-CA controls. It has no extension-level proxy controls.
 
-Repeater handles target traffic after manual sending. Networks requiring a proxy or custom certificate trust for platform access may require additional configuration or a future transport enhancement. Changing Burp's proxy settings alone does not configure this API client.
+Repeater handles target traffic after manual sending. Networks requiring a proxy for platform access may require additional Java/network configuration or a future transport enhancement. Custom certificate trust can be supplied through the additional-CA setting. Changing Burp's proxy settings alone does not configure this API client.
 
 ## 15. API operations and limits
 
@@ -561,6 +634,9 @@ Repeater handles target traffic after manual sending. Networks requiring a proxy
 | Action | Operation | Purpose |
 | --- | --- | --- |
 | Connect / load scans | `GET /api/v1/scans/` | Uses `page_size=100`, descending creation order, and an optional project filter. |
+| Sign in with SSO | Official CLI login, then `GET /api/v1/user/me/` and `GET /api/v1/scans/` | CLI owns the browser login and credential creation; extension verifies identity before loading scans. |
+| Use saved login | `GET /api/v1/user/me/`, then `GET /api/v1/scans/` | Reads an existing saved CLI credential and verifies it; does not launch the CLI or browser. |
+| Cancel sign-in | No additional API operation. | Cancels the pending connection and stops an extension-launched CLI login process; no logout or token revocation. |
 | Load findings | `GET /api/v1/issues/` | Uses the selected scan UUID and `page_size=100`. |
 | Fetch full finding | `GET /api/v1/issues/{id}/` | Retrieves one current issue record. |
 | Mark false positive in NightVision | `PUT`, then `GET`, at `/api/v1/issues/{id}/` | Sets `resolution` to `1`, then verifies the saved ID and value. |
@@ -582,6 +658,10 @@ Repeater handles target traffic after manual sending. Networks requiring a proxy
 | Configured HTTP request timeout | 45 seconds. |
 | Redirects | Disabled. |
 | Automatic polling | None. |
+| SSO login timeout | Five minutes, enforced by the extension without depending on CLI timeout flags. |
+| Saved credential size | Token up to 16 KiB; config file up to 1 MiB. Token must contain nonempty printable ASCII text. |
+| CLI diagnostic capture | Drains all output but keeps only the first 64 KiB in memory for classification. Raw output is not displayed or saved. |
+| SSO API origin | Production `https://api.nightvision.net` only. |
 | Application-level write retries | None. |
 | UI network operations | One background operation at a time. |
 | Local annotation size | 7,000 serialized characters and UTF-8 bytes, including metadata. |
@@ -599,16 +679,25 @@ Pagination loops, collection limits, invalid JSON, and missing result arrays pro
 | Unsupported class version | Use a compatible Burp runtime. For rebuilding, use JDK 17 or 21 and verify the selected Java installation. |
 | API origin error | Enter the HTTPS API origin without an API path, query, or embedded credentials. |
 | ID must be a UUID | Use the appropriate project, scan, or issue UUID rather than a name or URL. |
-| HTTP 401 | Check token validity and token authentication format. Bearer JWT login is not supported. |
+| HTTP 401 | For SSO/saved login, click **Sign in with SSO** again. For manual tokens, check validity and token format. |
+| CLI cannot start | Install the current CLI. Use **Browse** to select its executable; GUI-launched Burp may have a different PATH from your terminal. |
+| SSO browser does not open or CLI exits | Run `nightvision login` from a normal desktop terminal, complete SSO, then click **Use saved login**. Version 0.3.1 no longer passes the compatibility-sensitive `--timeout` flag. Read **Connection diagnostics** for exit details. |
+| No reusable saved login | Click **Use saved login** with auto-detection; if needed, use **Browse login file** to choose `.nightvision/nightvision.yml`. Read **Connection diagnostics** for checked paths. Run terminal login under the same OS environment as Burp. |
+| SSO timeout | Retry and finish the browser flow within five minutes; check the desktop browser and local callback availability. |
+| SSO refuses API origin | Use `https://api.nightvision.net`; other origins require a manually supplied token. |
 | HTTP 403 | Check resource and update permissions. A token may be able to read an issue without permission to update it. |
 | HTTP 404 | Check the ID, API origin, and access. |
 | HTTP 429 | Wait before retrying; there is no automatic rate-limit retry. |
 | Redirect or unexpected HTTP status | Verify the API origin and whether a gateway is redirecting to a login page. Redirects are not followed. |
-| Network, TLS, or certificate failure | Check network access and Java certificate trust. Burp's upstream proxy settings do not automatically apply. |
+| SSLHandshakeException / certificate-chain failure | On Windows, leave **Use trusted Windows roots** enabled and reconnect. If needed, select your IT-provided issuer CA using **Browse CA**, then click **Use saved login**. Read **Connection diagnostics** for the actual failure class. |
+| Certificate hostname mismatch | Check API origin and the certificate presented by the server/network gateway; adding an issuer CA does not bypass hostname validation. |
+| Expired/not-yet-valid certificate | Check the system clock and have the server or inspecting gateway’s certificate validity checked. |
+| Invalid additional CA file | Select a currently valid issuer/root CA certificate, in PEM or DER form, rather than a server leaf certificate. |
+| Other network or TLS failure | Read **Connection diagnostics**; Burp’s upstream proxy settings do not automatically configure this Java client. |
 | Connection succeeds but no scans appear | Clear an unnecessary project filter, check account access, and reconnect. An accessible collection can be empty. |
 | Findings appear empty | Check the load result and clear the text filter. |
 | Old scan's findings remain | Click **Load findings** after changing the scan and confirm success. Failed loads can retain the prior table. |
-| Request or response is blank | Upgrade to 0.2.1, select the finding, and click **Fetch full finding**. Read the label above the editor; inspect `extra_info.http_requests` and `extra_info.http_responses` in JSON. Empty arrays mean no captures were returned. Unsupported bodies need the original text or another adapter. |
+| Request or response is blank | Use 0.2.1 or newer, select the finding, and click **Fetch full finding**. Read the label above the editor; inspect `extra_info.http_requests` and `extra_info.http_responses` in JSON. Empty arrays mean no captures were returned. Unsupported bodies need the original text or another adapter. |
 | Request format error | Paste raw HTTP beginning with a request line, not a curl command. |
 | Replay reaches an unexpected host or path | Check destination, Repeater service, request line, and Host header independently. |
 | Replay returns a login page, 401, or 403 | Refresh target application credentials. The NightVision API token does not authenticate the target. |
@@ -661,19 +750,19 @@ The same source can be used on a suitable Kali, Ubuntu, or other Linux desktop. 
 The script creates:
 
 ```text
-dist/nightvision-burp-0.2.1.jar
+dist/nightvision-burp-0.3.2.jar
 ```
 
 It performs these steps:
 
 1. Finds Java on PATH.
-2. Downloads pinned Montoya and Gson dependencies when not cached.
+2. Downloads pinned Montoya, Gson, and SnakeYAML dependencies when not cached.
 3. Verifies pinned SHA-256 digests, including cached files.
 4. Compiles Java 17-compatible extension classes.
 5. Compiles and runs offline regression checks against a mock Montoya host.
-6. Packages the extension, demo, Gson classes, and Gson license into the JAR.
+6. Packages the extension, demo, Gson and SnakeYAML classes, and license texts into the JAR.
 
-Dependencies are cached in `.build/deps/`; compiled classes go to `target/`. These directories can be recreated. Gson is bundled; Montoya classes are supplied by Burp and are not bundled.
+Dependencies are cached in `.build/deps/`; compiled classes go to `target/`. These directories can be recreated. Gson and SnakeYAML are bundled; Montoya classes are supplied by Burp and are not bundled.
 
 The script uses `javac` when available, otherwise attempts Java's compiler module. A compiler must be present. No third-party Python package is required.
 
@@ -704,10 +793,10 @@ mvn clean package
 Load the shaded output:
 
 ```text
-target/nightvision-burp-0.2.1.jar
+target/nightvision-burp-0.3.2.jar
 ```
 
-Maven includes Gson and treats Montoya as provided. The standalone regression checks are not registered with Maven Surefire. Use `tools/build.py` to run those checks. The Python build was exercised during development; the Maven alternative was not separately executed in that environment.
+Maven includes Gson and SnakeYAML and treats Montoya as provided. The standalone regression checks are not registered with Maven Surefire. Use `tools/build.py` to run those checks. The Python build was exercised during development; the Maven alternative was not separately executed in that environment.
 
 ### Check the supplied JAR hash
 
@@ -720,7 +809,7 @@ sha256sum -c SHA256SUMS.txt
 On Windows, from the project directory:
 
 ```powershell
-Get-FileHash .\dist\nightvision-burp-0.2.1.jar -Algorithm SHA256
+Get-FileHash .\dist\nightvision-burp-0.3.2.jar -Algorithm SHA256
 Get-Content .\dist\SHA256SUMS.txt
 ```
 
@@ -728,7 +817,7 @@ Compare the reported hash with the text file. That checksum describes the distri
 
 ## 18. Verification and test coverage
 
-Version 0.2.1 passed **92 offline checks**, covering:
+Version 0.3.2 passed **191 checks**, without external NightVision API calls, covering:
 
 - API endpoints, queries, token headers, and update payloads.
 - Pagination, loops, malformed collections, and credential boundaries.
@@ -744,14 +833,22 @@ Version 0.2.1 passed **92 offline checks**, covering:
 - Distinction between an accepted update and a verified saved result.
 - Swing tab registration, demo, filtering, notes, and remote-status display.
 - Recording verified-sync metadata only after read-back succeeds.
+- SSO subprocess arguments, executable paths with spaces, bounded output classification without raw-output logging, and removal of inherited token/API overrides.
+- Saved-credential validation, process failure without stale-login fallback, cancellation, timeout, and unload cleanup using real child Java fixtures.
+- Saved-login origin boundaries, verified user identity before scan loading, 401/403/service errors, and absence of credentials in Burp preferences.
+- Current CLI YAML config from a simulated terminal/browser login, JSON, quoting, comments, BOM, config precedence, selected files, legacy fallback, and wrong-origin rejection.
+- Malformed YAML, duplicate and ambiguous keys, custom tags, nested token rejection, and diagnostic errors that omit source lines and credentials.
+- A synthetic older CLI that rejects `--timeout`, and noisy failing output larger than the retained capture cap.
+- Real loopback HTTPS with a generated test CA: reject untrusted chains before sending Authorization, accept a selected CA, reject a wrong hostname, and retain isolation from global JVM trust.
+- A real Swing connection failing on TLS and recovering after a CA is selected; safe diagnostics, invalid CA inputs, and retained uncertainty/no retry for TLS-failed writes.
 
-These use a fake API transport and mock Montoya host. They do not prove real-tenant permissions, platform classification side effects, all evidence formats, or compatibility with every Burp version.
+These use mocked REST responses, a mock Montoya host, real synthetic CLI subprocesses, and a local HTTPS server. TLS fixtures use JDK `keytool` to generate temporary certificates and private keys during tests, then remove them. No generated private key is packaged. They do not prove real-tenant SSO/identity-provider compatibility, native Windows-store behavior on every JVM, company gateway compatibility, permissions, platform classification side effects, all evidence formats, or compatibility with every Burp version. The official Linux CLI’s help and compiled configuration/login routines were inspected; this confirmed current `nightvision.yml` storage and the top-level `token` key. No real account login was performed during development.
 
 ### Suggested integration check
 
 1. Load the JAR and inspect Burp's extension errors.
 2. Try the installed offline demo and local save/export.
-3. Connect and load one accessible scan.
+3. Use **Sign in with SSO**, complete your organization’s browser login, and confirm the reported account and scan list. Restart Burp and check **Use saved login**. Manual-token mode remains available.
 4. Compare one finding's full JSON and extracted traffic with NightVision's evidence.
 5. Open its request in Repeater and verify service and application authentication before testing.
 6. On a validated finding you intend to reclassify, perform the remote action and confirm the result in NightVision.
@@ -761,28 +858,38 @@ These use a fake API transport and mock Montoya host. They do not prove real-ten
 | Path | Purpose |
 | --- | --- |
 | `README.md` | This feature and operations guide. |
-| `dist/nightvision-burp-0.2.1.jar` | Prebuilt extension. |
+| `dist/nightvision-burp-0.3.2.jar` | Prebuilt extension. |
 | `dist/SHA256SUMS.txt` | Distributed JAR hash. |
 | `pom.xml` | Maven dependencies and shaded build. |
 | `tools/build.py` | Build and offline-check runner. |
 | `src/main/java/local/nightvision/NightVisionExtension.java` | Burp entry point, Swing UI, annotations, background actions, remote action, and exports. |
-| `src/main/java/local/nightvision/NightVisionClient.java` | API transport, pagination, explicit resolution update, and verification. |
+| `src/main/java/local/nightvision/NightVisionClient.java` | API transport, user verification, pagination, explicit resolution update, and verification. |
+| `src/main/java/local/nightvision/NightVisionLogin.java` | Official CLI login lifecycle, saved-credential reading, origin binding, cancel, and timeout. |
+| `SSO-SETUP.md` | Short SSO installation and upgrade guide. |
+| `TLS-SETUP.md` | API certificate-trust recovery guide. |
+| `src/main/java/local/nightvision/TlsSupport.java` | API-scoped trust, Windows roots, additional CA loading, hostname-preserving trust delegation, and safe TLS diagnostics. |
+| `src/test/java/local/nightvision/TlsSelfTest.java` | Real local HTTPS trust, hostname, isolation, and UI recovery tests. |
+| `src/main/java/local/nightvision/SavedLogin.java` | Bounded current-config/legacy-credential parsing and configured API checks. |
 | `src/main/java/local/nightvision/Finding.java` | Field adaptation, resolution labels, capture access, destination validation, and request preparation. |
 | `src/main/java/local/nightvision/Traffic.java` | NightVision capture arrays, raw formats, structured HTTP reconstruction, and unsupported-content diagnostics. |
 | `src/test/resources/nightvision-structured-traffic.json` | Synthetic live-format traffic fixture; contains no tenant data. |
 | `src/main/resources/demo-findings.json` | Synthetic finding. |
 | `src/test/java/local/nightvision/SelfTest.java` | Offline regression checks. |
+| `src/test/java/local/nightvision/LoginSelfTest.java` | SSO process, saved credential, cancellation, and UI regression tests. |
+| `src/test/java/local/nightvision/LoginProcessFixture.java` | Synthetic child process used by tests; never opens a browser or calls NightVision. |
 | `THIRD_PARTY_NOTICES.md` | Dependency and license notices. |
 | `licenses/GSON-APACHE-2.0.txt` | Gson license. |
+| `licenses/SNAKEYAML-APACHE-2.0.txt` | SnakeYAML license. |
 
 | Dependency | Version | Use |
 | --- | --- | --- |
 | PortSwigger Montoya API | 2026.7 | Compile-time API supplied by Burp at runtime. |
 | Google Gson | 2.13.2 | JSON processing; bundled. |
+| SnakeYAML | 2.5 | CLI configuration parsing with SafeConstructor; bundled. |
 | Maven Compiler Plugin | 3.14.1 | Maven build only. |
 | Maven Shade Plugin | 3.6.1 | Maven packaging only. |
 
-Gson's Apache 2.0 license is included in the package and JAR. Review `THIRD_PARTY_NOTICES.md`. This custom extension is not published to the BApp Store.
+Apache 2.0 license texts for Gson and SnakeYAML are included in the package and JAR. Review `THIRD_PARTY_NOTICES.md`. This custom extension is not published to the BApp Store.
 
 ## 20. Current limitations
 
@@ -797,7 +904,10 @@ Gson's Apache 2.0 license is included in the package and JAR. Review `THIRD_PART
 - Notes stay local; preferences retain the latest assessment and last verified sync, not full edit history.
 - No built-in import, cross-machine annotation synchronization, or purge-all control is included.
 - Exports are JSON and cover the loaded collection only.
-- No extension-level proxy, custom trust-store, SSO, or Bearer-token controls are included.
+- SSO depends on the official current CLI and a usable desktop browser; it is limited to the production API origin.
+- API trust can use JVM roots, available native Windows roots, and an additional CA certificate file. Importing password-protected trust stores and configuring client TLS private keys are not implemented.
+- No extension-level proxy or direct Bearer-token controls are included.
+- The extension does not auto-connect, revoke credentials, log out the browser, or manage identity-provider policies.
 - No Burp Site Map issue import, Scanner integration, or automatic association of Repeater responses is implemented.
 
 ## 21. Frequently asked questions
@@ -828,11 +938,15 @@ No. Refresh the application's cookies or authorization headers yourself when nee
 
 ### Is the API token remembered after restarting Burp?
 
-The extension does not persist it. Enter it again after loading or restarting the extension.
+A manually entered API token is not persisted by the extension. For SSO, the official CLI saves its credential separately; click **Use saved login** after restarting Burp to verify and reuse it.
+
+### Do I have to reinstall the extension every time?
+
+Burp can reload it on startup: enable **Settings → Extensions → Core extension settings → Automatically reload extensions on startup**, keep the extension’s **Loaded** checkbox selected, and keep the JAR at a permanent path. This is separate from authentication; click **Use saved login** to reconnect after Burp starts.
 
 ### Does Disconnect remove saved assessments?
 
-No. It clears the connection and loaded view. Preferences, exports, and Repeater tabs remain.
+No. It clears the connection and loaded view. Preferences, exports, and Repeater tabs remain. The saved CLI credential and browser session also remain.
 
 ### Are annotations attached to a Burp project or shared with my team?
 
@@ -859,11 +973,19 @@ Yes. **Full finding JSON** shows the entire loaded issue object. Unrecognized tr
 | 0.1.0 | Initial API connection, scan selection, finding filters, evidence and traffic views, editable requests, Repeater handoff, local assessments and notes, JSON export, and offline demo. |
 | 0.2.0 | Added explicit remote false-positive updates, verified resolution mapping, read-back confirmation, remote-resolution display, local sync metadata, and expanded offline checks. |
 | 0.2.1 | Fixed empty request/response tabs for NightVision's structured capture arrays; added multiple-message selectors, per-capture destinations, reconstruction labels, missing-content diagnostics, and regression coverage. |
+| 0.3.0 | Added SSO through the official CLI, saved-login reuse, CLI executable selection, user verification, cancel/timeout handling, and credential/process regression checks. |
+| 0.3.1 | Fixed current CLI YAML/JSON credential loading, added saved-file selection and safe connection diagnostics, and removed dependency on the CLI `--timeout` flag. |
+| 0.3.2 | Added API-scoped trusted Windows roots, an additional CA file option, classified TLS diagnostics, and real loopback TLS/hostname regression tests. |
 
-This README documents version 0.2.1.
+This README documents version 0.3.2.
 
 ### References
 
+- [NightVision CLI installation and browser login](https://docs.nightviz.ai/welcome/tutorials-and-guides/installing-the-cli/)
+- [NightVision saved-login credential behavior](https://docs.nightviz.ai/integrations/mcp-server/)
+- [NightVision public CLI login integration source](https://github.com/nvsecurity/nightvision-mcp/blob/main/src/services/auth-service.ts)
+- [Java native Windows certificate-store provider](https://docs.oracle.com/en/java/javase/17/security/oracle-providers.html)
+- [Java extended trust manager and endpoint checks](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/javax/net/ssl/X509ExtendedTrustManager.html)
 - [NightVision REST API reference](https://docs.nightviz.ai/reference/)
 - [NightVision public OpenAPI document](https://docs.nightviz.ai/openapi/nightvision-rest-api.yaml)
 - [NightVision's resolution mapping in its public source](https://github.com/nvsecurity/nightvision-mcp/blob/main/src/types/index.ts)

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build a Burp JAR and run offline checks using Python 3 and JDK 17 or 21.
 
-No Maven installation is required. The first build downloads two pinned,
+No Maven installation is required. The first build downloads three pinned,
 hash-checked public dependencies from Maven Central. Burp supplies Montoya
-at runtime; only Gson is included in the output JAR.
+at runtime; Gson and SnakeYAML are included in the output JAR.
 """
 import argparse
 import hashlib
@@ -20,6 +20,8 @@ DEPENDENCIES = [
      "cb852b7b883290fcc1d21b13d80fa10f5b13a0f57335d710d2b1e5956ecb2a94"),
     ("gson-2.13.2.jar", "com/google/code/gson/gson/2.13.2/gson-2.13.2.jar",
      "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0"),
+    ("snakeyaml-2.5.jar", "org/yaml/snakeyaml/2.5/snakeyaml-2.5.jar",
+     "e6682acf1ace77508ef13649cbf4f8d09d2cf5457bdb61d25ffb6ac0233d78dd"),
 ]
 
 def run(args):
@@ -67,21 +69,22 @@ def build():
     cmd = [java, "-Djava.awt.headless=true", "-cp", str(tests) + os.pathsep + test_cp, "local.nightvision.SelfTest"]
     if options.preview: cmd.append(options.preview.resolve())
     run(cmd)
-    output = ROOT / "dist" / "nightvision-burp-0.2.1.jar"
+    output = ROOT / "dist" / "nightvision-burp-0.3.2.jar"
     output.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as jar:
-        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.2.1\r\n\r\n")
+        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.3.2\r\n\r\n")
         for path in sorted(classes.rglob("*")):
             if path.is_file(): jar.write(path, path.relative_to(classes).as_posix())
-        gson = paths[1]
-        with zipfile.ZipFile(gson) as dependency:
-            for item in dependency.infolist():
-                name = item.filename
-                if item.is_dir() or name.upper() == "META-INF/MANIFEST.MF" or name.endswith("module-info.class"):
-                    continue
-                if name.upper().endswith((".SF", ".RSA", ".DSA")): continue
-                jar.writestr(name, dependency.read(name))
-        jar.write(ROOT / "licenses" / "GSON-APACHE-2.0.txt", "META-INF/licenses/GSON-APACHE-2.0.txt")
+        for bundled in paths[1:]:
+            with zipfile.ZipFile(bundled) as dependency:
+                for item in dependency.infolist():
+                    name = item.filename
+                    if item.is_dir() or name.upper() == "META-INF/MANIFEST.MF" or name.endswith("module-info.class"):
+                        continue
+                    if name.upper().endswith((".SF", ".RSA", ".DSA")): continue
+                    jar.writestr(name, dependency.read(name))
+        for license_file in sorted((ROOT / "licenses").glob("*")):
+            if license_file.is_file(): jar.write(license_file, "META-INF/licenses/" + license_file.name)
     print("Built " + str(output), flush=True)
 
 if __name__ == "__main__":
