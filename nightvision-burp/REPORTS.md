@@ -1,4 +1,4 @@
-# Validation reports — version 0.4.1
+# Validation reports — version 0.5.4
 
 The extension creates HTML reports for review and printing, and CSV files for
 spreadsheet analysis. Reports use the findings already loaded in Burp and the
@@ -7,9 +7,9 @@ does not change a finding in NightVision.
 
 ## Upgrade when validations did not save
 
-Version 0.4.1 fixes the earlier validation keys exceeding Java's preference-key
+Version 0.4.1 fixed the earlier validation keys exceeding Java's preference-key
 limit. Copy any notes still visible before unloading the older extension, then
-load `dist/nightvision-burp-0.4.1.jar`. Re-enter any lost verdict/notes and click
+load `dist/nightvision-burp-0.5.4.jar`. Re-enter any lost verdict/notes and click
 **Save local validation**. Confirm the status says **Validation saved and read
 back from Burp preferences** before creating the report.
 
@@ -67,12 +67,16 @@ The scan field uses loaded data, not a newly edited Scan UUID input.
 | Saved analyst notes | Included | Uses saved preference values; excludes temporary editor changes. |
 | Scanner payload and evidence text | Excluded | HTML only. Adds payload, evidence, and evidence details present in the loaded records. Fetch full finding first when needed. |
 | Selected finding's current capture choices | Excluded | HTML only. Adds the selected original request/response entries for that finding, if it is in the report scope. Other findings' traffic is excluded. |
+| Saved manual retest attachments | Included for HTML | Reads all saved attachments belonging to findings in scope from the configured local evidence folder. Checks message hashes and includes source, context, timestamps, notes, and message text. |
 
 HTTP entries retain their source field and reconstruction/unsupported-content
 note. They are labeled **original captured HTTP evidence**. Matching positions
 are not treated as a request/response pairing. Edited Request tab text,
-temporary destination edits, and Repeater responses are excluded. Retest evidence
-capture has not been added in this release.
+temporary destination edits, and unattached Repeater responses are excluded.
+Explicitly attached retests have a separate **Saved manual retest evidence**
+section. See [EVIDENCE.md](EVIDENCE.md) to attach and manage them. Their attachment
+time is recorded automatically; any original test time is analyst-supplied.
+No verdict is inferred from an attachment or response status.
 
 CSV contains one row per finding and repeats metadata for independent filtering.
 It includes notes only when selected; it never includes scanner payloads or HTTP
@@ -99,6 +103,9 @@ Individual text fields are limited to **16,000 characters**, with a visible
 truncation marker. The in-app preview shows the first **50 findings** when the
 scope is larger; summaries and the saved file still cover the complete chosen
 scope. A large/empty report gives guidance to change the scope or omit evidence.
+Saved retest enrichment additionally allows up to **100 attachments** and
+**32 MiB of source messages**. Evidence that fails hash/ownership checks stops
+report preparation rather than being silently included or skipped.
 
 File writing is staged in the destination directory before replacement. Reports
 are not automatically opened, uploaded, emailed, or synchronized.

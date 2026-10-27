@@ -275,7 +275,10 @@ public class SelfTest {
         TlsSelfTest.run();
         ReportSelfTest.run();
         PersistenceSelfTest.run();
-        System.out.println("PASS: " + checks + " checks (REST, SSO, TLS, traffic, reports, real Java preference persistence, and Swing workflow).");
+        EvidenceSelfTest.run();
+        EvidenceCompatibilitySelfTest.run();
+        RepeaterSelfTest.run();
+        System.out.println("PASS: " + checks + " checks (REST, SSO, TLS, traffic, reports, real preferences, evidence files/context menu, and Swing workflow).");
     }
     /** Collects a Java HTTP BodyPublisher so tests can inspect the exact outgoing JSON payload. */
     static String body(HttpRequest request) throws Exception {

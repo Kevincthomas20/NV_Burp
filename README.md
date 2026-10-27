@@ -1,11 +1,11 @@
 # NightVision Finding Validator for Burp Suite
 
-**Extension version:** 0.4.1  
+**Extension version:** 0.5.4  
 **Documentation updated:** October 26, 2026
 
 NightVision Finding Validator brings NightVision scan findings into Burp Suite for manual review. Connect to NightVision, select a scan, examine the evidence, open a finding's HTTP request in Repeater, and record your assessment. When you determine that a finding is a false positive, you can explicitly update its resolution in NightVision and verify that the change saved.
 
-The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.4.1 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
+The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.5.4 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
 
 ## Contents
 
@@ -59,6 +59,8 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Request (editable) | Displays a captured request, reconstructed from structured fields when needed; lets you edit or replace it. |
 | Captured request / Captured response | Browse the messages returned in each array independently. Shows source field, count, and parsing or reconstruction status. |
 | Original response | Displays recognized response text from the NightVision finding. |
+| Attach retest evidence to NightVision… | Burp context-menu action that explicitly saves one selected completed exchange to a chosen loaded finding, without sending traffic or changing its verdict. |
+| Retest evidence | Lists local attachments, verifies their message hashes, and shows capture metadata plus request/response previews. Includes folder selection, refresh, and explicit attachment removal. |
 | Full finding JSON | Displays the complete loaded issue as formatted, read-only JSON. |
 | Destination URL | Sets the HTTP connection service used when opening the request in Repeater. |
 | Open in Repeater | Creates a Repeater tab containing the request for manual sending. |
@@ -79,7 +81,7 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Requirement | Details |
 | --- | --- |
 | Burp Suite | A desktop Community or Professional installation with Montoya API support. |
-| API dependency | Compiled against Montoya API 2026.7. Compatibility with your installed Burp version still needs verification. |
+| API dependency | Compiled against Montoya API 2026.7. Evidence capture includes a pre-1.0 adapter for Burp 2022.12.6; the build separately tests the workflow with Montoya 0.10.1. Live integration remains to be verified. |
 | Java runtime | Targets Java 17 bytecode. Burp must run on Java 17 or later; a compatible Burp installation's bundled runtime can provide this. |
 | NightVision access | A NightVision account with access to the scans and issues, using CLI SSO login or a manual API token. |
 | SSO browser login | The current official NightVision CLI installed on the same machine and OS account as Burp, with an available desktop browser. |
@@ -99,10 +101,10 @@ Rebuilding requires JDK 17 or 21 and either Python 3.8 or later for the included
 
 ### Install the prebuilt JAR
 
-1. Extract `nightvision-burp-extension-v0.4.1.zip`.
+1. Extract `nightvision-burp-extension-v0.5.4.zip`.
 2. Open Burp Suite and go to **Extensions → Installed → Add**.
 3. Choose **Java** as the extension type.
-4. Select `nightvision-burp/dist/nightvision-burp-0.4.1.jar` from the extracted package.
+4. Select `nightvision-burp/dist/nightvision-burp-0.5.4.jar` from the extracted package.
 5. Click **Next** and inspect the extension's **Output** and **Errors** tabs.
 6. Close the installer and open the new **NightVision** tab.
 
@@ -213,7 +215,7 @@ SSO and saved-login actions connect only to NightVision’s production API at `h
 
 Browser sign-in and CLI login can succeed while the Java API connection fails with `SSLHandshakeException`. They use different TLS implementations and may use different trusted-certificate stores. A company TLS-inspection gateway can be one cause, but the exception can also mean an expired certificate, a hostname mismatch, or a protocol problem.
 
-Version 0.4.1 retains Java’s default trusted roots and adds these API-specific settings:
+Version 0.5.4 retains Java’s default trusted roots and adds these API-specific settings:
 
 | Control | Behavior |
 | --- | --- |
@@ -398,10 +400,12 @@ For ordinary replay, align the destination, request target, and Host header with
 2. Confirm that the destination is authorized for testing. The extension does not enforce Burp's target scope before opening Repeater.
 3. Update expired target-application cookies or authorization headers if necessary.
 4. Click **Open in Repeater**.
-5. Open the resulting tab, captioned with `NV` and the first eight characters of the issue ID.
+5. The extension selects the docked Repeater tool when its standard Swing tab is available. Otherwise select **Repeater** yourself. The basic handoff uses Burp's default tab name. If only the named overload is available, the caption is `NV` and the first eight characters of the issue ID.
 6. Inspect the service and message, then click Repeater's **Send** when ready.
 7. Compare the result with the evidence and an appropriate control request.
 8. Return to the extension and record your assessment.
+
+A receipt directly below the button confirms the handoff and naming mode. Version 0.5.4 resolves the installed public Repeater API before invocation, preferring the basic one-request method. It avoids a direct compile-time dependency on the named-tab method. The available overload and actual return type are resolved before a single handoff; there is no fallback retry after a method has been invoked. Invalid inputs are reported there. Burp handoff/API compatibility failures also show an error dialog and a sanitized stage/error type, available API signature, bounded Burp version when readable, and allowlisted missing Montoya member signature under **Extensions → NightVision → Errors**. Other exception text and request contents are not logged. A failed handoff or tab-navigation attempt is never retried automatically. Detached/custom Burp layouts may require selecting Repeater manually.
 
 Opening a Repeater tab does not send the request. Clicking the action again creates another tab. Existing Repeater tabs remain independently available after selection changes or disconnection.
 
@@ -422,6 +426,12 @@ The NightVision API token is never inserted into target requests. Target authent
 | Retest passed | Your retest did not reproduce the original issue under the checked conditions. | No. |
 
 These are manual labels. An HTTP status code, reflected string, expired session, or failed request does not automatically establish a verdict.
+
+### Attach manual retest evidence
+
+After manually sending a request in Burp Repeater, right-click its completed request or response and select **Attach retest evidence to NightVision…**. Choose the loaded finding, verify its issue UUID/origin/target, add a label and optional context, and click **Save evidence**. A verified-save receipt confirms the local attachment. This action leaves the local verdict, validation notes, and NightVision unchanged.
+
+The **Retest evidence** tab displays saved attachments for the selected finding and verifies their SHA-256 hashes before showing their messages. It remembers a local evidence folder, initially `<OS user home>/NightVision-Burp/evidence`. Raw selected HTTP bytes are saved separately from preferences and may contain session credentials. Binary bodies are retained in full, with an explicit omission note in text previews. Read [EVIDENCE.md](EVIDENCE.md) for the workflow, ownership/timestamp rules, storage, removal, and limits.
 
 ### Save an assessment
 
@@ -445,7 +455,7 @@ observed under these test conditions.
 
 Annotations are associated with the API origin and issue UUID. They can survive Burp restarts when the same preference store is retained. They are not scoped by this extension to a Burp project and do not automatically transfer to other machines or analysts.
 
-Version 0.4.1 fixes an invalid preference-key length in earlier releases: the previous keys were 87 characters, exceeding Java's 80-character key limit. Current keys are 57 characters and retain the full SHA-256 identity. Existing records accepted by older lenient hosts remain readable; a new explicit save writes the supported key. Before unloading an older extension, copy any notes still visible in its editor. Values from rejected saves were never persisted and cannot be recovered automatically.
+Version 0.4.1 fixed an invalid preference-key length in earlier releases: the previous keys were 87 characters, exceeding Java's 80-character key limit. Current keys are 57 characters and retain the full SHA-256 identity. Existing records accepted by older lenient hosts remain readable; a new explicit save writes the supported key. Before unloading an older extension, copy any notes still visible in its editor. Values from rejected saves were never persisted and cannot be recovered automatically.
 
 Different issue UUIDs have separate notes, even when findings have similar titles or paths. Demo records use an `offline-demo` namespace. A different origin representation can also produce a different annotation identity.
 
@@ -523,7 +533,7 @@ Reverse a remote classification through NightVision's interface or a separately 
 
 Click **Validation report…** to choose a title, optional analyst name, format, scope, and content options. You can report on all loaded findings, visible rows in their current sort order, or the selected finding, and restrict any scope to saved reviewed verdicts. Save local validation first: unsaved notes, verdict changes, and request edits are excluded.
 
-HTML includes summary counts by local verdict and severity, finding metadata, and optionally saved notes, scanner evidence text, and the selected finding's chosen original HTTP captures. CSV includes one row per finding with metadata and optional saved notes; HTTP messages and scanner payloads are excluded. Both show the local verdict separately from the last loaded NightVision resolution and any historical sync receipt.
+HTML includes summary counts by local verdict and severity, finding metadata, and optionally saved notes, scanner evidence text, the selected finding's chosen original HTTP captures, and saved manual retest attachments for findings in scope. Saved retests are initially enabled for HTML and include provenance, context, attachment notes, hashes, and text representations of the messages. CSV includes one row per finding with metadata and optional saved notes; HTTP messages and scanner payloads are excluded. Both show the local verdict separately from the last loaded NightVision resolution and any historical sync receipt.
 
 Reports preview before saving and redact common credential patterns across their fields. HTML escapes external text and has no scripts or external assets. CSV quotes fields and prefixes risky formula starters as text. Redaction cannot detect every secret in prose; review content before sharing. Reports use loaded data without API calls or remote changes. Open saved HTML in a browser to print or save a PDF.
 
@@ -617,13 +627,14 @@ The Java extension runs inside Burp, persists annotations in Burp preferences, a
 | Edited request | Temporary editor state; copied to Repeater when requested. | No. |
 | Local status and notes | Burp extension preferences after saving. | No. |
 | Last verified sync metadata | Local annotation after successful verification. | No. |
+| Explicit retest attachments | User-selected local evidence folder: raw message files and metadata, including labels, context, notes, hashes, and attachment time. The folder path alone is remembered in preferences. | No. |
 | False-positive resolution | NightVision after the explicit update succeeds. | Yes: `{"resolution":1}`. |
 | Validation export | User-selected file path. | No. |
-| HTML/CSV report | User-selected file path; prepared snapshot and preview in memory. Common credential patterns are redacted; optional original evidence appears only in HTML. | No. |
+| HTML/CSV report | User-selected file path; prepared snapshot and preview in memory. Common credential patterns are redacted; optional original and saved retest evidence appears only in HTML. | No. |
 
 ### Credentials and preferences
 
-The extension does not write the API token to its JAR, annotation preferences, or exports. Disconnecting, loading the demo, and unloading clear the field and drop the connection reference. Java does not guarantee immediate erasure of immutable token strings from memory. SSO login delegates credential saving to the official CLI; the extension reads that file but does not create, modify, delete, encrypt, or revoke it. Disconnect and cancel leave this shared credential in place. These credentials can be reused by other NightVision tools running as the same OS user.
+The sign-in code does not copy the API token into the JAR, annotation preferences, or exports. Explicit retest attachments save the selected raw HTTP messages and may therefore contain authentication headers or cookies present in those messages. Disconnecting, loading the demo, and unloading clear the sign-in field and drop the connection reference; saved local attachments remain. Java does not guarantee immediate erasure of immutable token strings from memory. SSO login delegates credential saving to the official CLI; the extension reads that file but does not create, modify, delete, encrypt, or revoke it. Disconnect and cancel leave this shared credential in place. These credentials can be reused by other NightVision tools running as the same OS user.
 
 Local annotations use Burp's standard extension preferences. This extension adds no separate encryption layer or database. Exact physical preference paths depend on the host implementation. Keep unnecessary secrets out of notes.
 
@@ -660,6 +671,7 @@ Repeater handles target traffic after manual sending. Networks requiring a proxy
 | Filter or sort | No API request. | Changes the table view. |
 | Export local validations | No API request. | Writes a local file. |
 | Validation report… | No API request. | Snapshots loaded data, previews, and writes a chosen CSV/HTML file. |
+| Attach / view / remove retest evidence | No API or target request. | Saves, verifies, reads, or explicitly removes local attachment files. |
 | Offline demo | No API request. | Loads a bundled sample. |
 | Open in Repeater | No platform API or immediate target request. | Creates a tab for manual sending. |
 
@@ -716,6 +728,8 @@ Pagination loops, collection limits, invalid JSON, and missing result arrays pro
 | Old scan's findings remain | Click **Load findings** after changing the scan and confirm success. Failed loads can retain the prior table. |
 | Request or response is blank | Use 0.2.1 or newer, select the finding, and click **Fetch full finding**. Read the label above the editor; inspect `extra_info.http_requests` and `extra_info.http_responses` in JSON. Empty arrays mean no captures were returned. Unsupported bodies need the original text or another adapter. |
 | Request format error | Paste raw HTTP beginning with a request line, not a curl command. |
+| Attach retest evidence is absent or fails | Check the request/response editor’s Extensions submenu after receiving a response. Version 0.5.4 supports both requestResponse() and the getRequestResponse() accessor in Burp 2022.12.6, plus the early exchange and byte getter names. A remaining API failure keeps a diagnostic action visible; click it and inspect the sanitized error log. No other exchange is substituted. |
+| Open in Repeater seems to do nothing | Read the receipt directly below the button. Select Repeater manually if it is undocked. For a handoff failure, check Extensions → NightVision → Errors for the stage/type. Save unsaved notes before replacing the extension. |
 | Replay reaches an unexpected host or path | Check destination, Repeater service, request line, and Host header independently. |
 | Replay returns a login page, 401, or 403 | Refresh target application credentials. The NightVision API token does not authenticate the target. |
 | Local save does not change NightVision | Expected: use the separate remote false-positive action. |
@@ -767,7 +781,7 @@ The same source can be used on a suitable Kali, Ubuntu, or other Linux desktop. 
 The script creates:
 
 ```text
-dist/nightvision-burp-0.4.1.jar
+dist/nightvision-burp-0.5.4.jar
 ```
 
 It performs these steps:
@@ -810,7 +824,7 @@ mvn clean package
 Load the shaded output:
 
 ```text
-target/nightvision-burp-0.4.1.jar
+target/nightvision-burp-0.5.4.jar
 ```
 
 Maven includes Gson and SnakeYAML and treats Montoya as provided. The standalone regression checks are not registered with Maven Surefire. Use `tools/build.py` to run those checks. The Python build was exercised during development; the Maven alternative was not separately executed in that environment.
@@ -826,7 +840,7 @@ sha256sum -c SHA256SUMS.txt
 On Windows, from the project directory:
 
 ```powershell
-Get-FileHash .\dist\nightvision-burp-0.4.1.jar -Algorithm SHA256
+Get-FileHash .\dist\nightvision-burp-0.5.4.jar -Algorithm SHA256
 Get-Content .\dist\SHA256SUMS.txt
 ```
 
@@ -834,7 +848,7 @@ Compare the reported hash with the text file. That checksum describes the distri
 
 ## 18. Verification and test coverage
 
-Version 0.4.1 passed **275 checks**, without external NightVision API calls, covering:
+Version 0.5.4 passed **403 checks**, without external NightVision API calls, covering:
 
 - API endpoints, queries, token headers, and update payloads.
 - Pagination, loops, malformed collections, and credential boundaries.
@@ -842,6 +856,9 @@ Version 0.4.1 passed **275 checks**, without external NightVision API calls, cov
 - Errors that omit raw response bodies and token values.
 - Request-header normalization and body-text newline preservation.
 - Finding names, destination adaptation, and raw traffic extraction.
+- Actual Repeater button clicks through Montoya's static service/request factories: edited messages, host/port/TLS overrides, default tab naming/navigation, invalid inputs, runtime/linkage errors, sanitized diagnostics, detached layouts, no duplicate retry/network send, preserved notes, and unload protection.
+- Isolated editor API fixtures reproduce the exact previous requestResponse() NoSuchMethodError, then verify Object/Optional return descriptors, null/empty and unsupported values, missing methods, and no substitution of another table selection. Registered menu callback tests cover visible diagnostic actions, deduplicated safe logs, response availability, attachment-time linkage failures, and no storage/network/preference writes on failure.
+- Installed Repeater API resolution: basic and named-only interfaces, void/non-void returns, private host implementations accessed through public interfaces, failure unwrapping without retry, missing methods, safe signature extraction, and bounded product-version diagnostics.
 - NightVision structured request/response arrays, multiple captures, HAR-style headers, cookies, postData, content, and base64 UTF-8 bodies.
 - Escaped paths, duplicate headers, Unicode, body newline preservation, unsupported bodies, and malformed captures.
 - Mocked list-to-detail loading that populates both editors, capture selectors, per-request destinations, request edit preservation while browsing responses, and clearing on disconnect.
@@ -860,8 +877,16 @@ Version 0.4.1 passed **275 checks**, without external NightVision API calls, cov
 - A real Swing connection failing on TLS and recovering after a CA is selected; safe diagnostics, invalid CA inputs, and retained uncertainty/no retry for TLS-failed writes.
 - Report scope and sorting, saved annotations versus unsaved edits, original capture provenance, optional evidence, common credential redaction, HTML escaping, CSV formula/quote/newline handling, size/preview limits, and staged file replacement.
 - A real temporary Java preference store: reproduction of the oversized-key failure, supported compact keys, saved status/notes/time, fresh-extension reload, written HTML/CSV, origin isolation, legacy reads, and truthful failure handling for dropped/throwing writes.
+- Pre-1.0 API capture: getRequestResponse(), httpRequest()/httpResponse(), asBytes(), response availability without hasResponse(), and service metadata from the same exchange's request; no alternate table selection or method-body retry.
+- Retest evidence: explicit editor/table selection, defensive byte snapshots, request/response bounds, actual registered menu actions, cancellation/busy behavior, chosen finding ownership, preserved notes/verdicts, raw/binary file fidelity, hashes, malformed/transplanted/symlink records, locking, safe removal, limits, fresh-controller reload, stale-load rejection, and HTML provenance/redaction.
 
 These use mocked REST responses, a mock Montoya host, real synthetic CLI subprocesses, a real disposable Java preference node, and a local HTTPS server. TLS fixtures use JDK `keytool` to generate temporary certificates and private keys during tests, then remove them. No generated private key is packaged. They do not prove real-tenant SSO/identity-provider compatibility, native Windows-store behavior on every JVM, company gateway compatibility, permissions, platform classification side effects, all evidence formats, or compatibility with every Burp version. The official Linux CLI’s help and compiled configuration/login routines were inspected; this confirmed current `nightvision.yml` storage and the top-level `token` key. No real account login was performed during development.
+
+The same compiled Repeater runner also passed **52 checks each** with the published Montoya **2023.12.1** and **2024.12** API libraries on its runtime classpath. These checks use a mock Burp host and validate API linkage/workflow, not a live installation of those Burp versions.
+
+The Python build additionally runs **56 pre-1.0 evidence workflow checks** in a separate JVM containing the pinned Montoya **0.10.1** API, with the current SDK absent from that classpath. This exercises the Repeater editor selection, completed-response checks, exact raw/binary bytes, explicit target choice, save, hashes, reload, and written reports through the real early API names. It does not run a live Burp UI or contact a NightVision tenant.
+
+The API classes bundled in the official **Burp Community 2022.12.6** JAR were additionally inspected. The same compiled code passed **56 evidence workflow checks** and **52 Repeater checks** with those exact extracted API classes, with the current SDK absent from the runtime classpath. This validates the older getter names and handoff linkage with a mock host; the Burp application UI was not launched. No Burp/API binaries are redistributed in this package.
 
 ### Suggested integration check
 
@@ -877,7 +902,7 @@ These use mocked REST responses, a mock Montoya host, real synthetic CLI subproc
 | Path | Purpose |
 | --- | --- |
 | `README.md` | This feature and operations guide. |
-| `dist/nightvision-burp-0.4.1.jar` | Prebuilt extension. |
+| `dist/nightvision-burp-0.5.4.jar` | Prebuilt extension. |
 | `dist/SHA256SUMS.txt` | Distributed JAR hash. |
 | `pom.xml` | Maven dependencies and shaded build. |
 | `tools/build.py` | Build and offline-check runner. |
@@ -887,6 +912,14 @@ These use mocked REST responses, a mock Montoya host, real synthetic CLI subproc
 | `SSO-SETUP.md` | Short SSO installation and upgrade guide. |
 | `TLS-SETUP.md` | API certificate-trust recovery guide. |
 | `REPORTS.md` | Report workflow, scope, evidence, redaction, and output limits. |
+| `EVIDENCE.md` | Manual retest attachment, viewing, local storage, integrity checks, removal, and report workflow. |
+| `src/main/java/local/nightvision/EvidenceStore.java` | Immutable local attachment records, binary message files, metadata, hashes, bounded reads, atomic commits, and safe removal. |
+| `src/main/java/local/nightvision/EvidenceCapture.java` | Explicit exchange selection, current/pre-1.0 editor/exchange/byte aliases, and bounded raw-message snapshots. |
+| `src/main/java/local/nightvision/EvidenceController.java` | Context-menu action, attachment dialog, evidence tab, and file workers. |
+| `src/test/java/local/nightvision/RepeaterSelfTest.java` | Real button/static-factory handoff, API shape compatibility, docked navigation, and safe failure regression checks. |
+| `src/main/java/local/nightvision/RepeaterBridge.java` | Public runtime API lookup, basic handoff preference, one invocation, and safe missing-member/version diagnostics. |
+| `src/test/java/local/nightvision/EvidenceCompatibilitySelfTest.java` | Isolated runtime editor API descriptors and real registered menu failure-action regression checks. |
+| `src/test/java/local/nightvision/EvidenceSelfTest.java` | File-backed capture, context-menu, ownership, binary integrity, reload, and report tests. |
 | `examples/sample-validation-report.html` and `.csv` | Synthetic validation report examples. |
 | `src/main/java/local/nightvision/ValidationReport.java` | Immutable report model, HTML/CSV rendering, spreadsheet text protection, and staged file writes. |
 | `src/main/java/local/nightvision/ReportRedactor.java` | Common credential-pattern redaction for report fields. |
@@ -909,6 +942,7 @@ These use mocked REST responses, a mock Montoya host, real synthetic CLI subproc
 | Dependency | Version | Use |
 | --- | --- | --- |
 | PortSwigger Montoya API | 2026.7 | Compile-time API supplied by Burp at runtime. |
+| PortSwigger Montoya API | 0.10.1 | Python build legacy workflow test only; absent from compile/runtime packaging. |
 | Google Gson | 2.13.2 | JSON processing; bundled. |
 | SnakeYAML | 2.5 | CLI configuration parsing with SafeConstructor; bundled. |
 | Maven Compiler Plugin | 3.14.1 | Maven build only. |
@@ -921,15 +955,16 @@ Apache 2.0 license texts for Gson and SnakeYAML are included in the package and 
 - Live Burp/NightVision integration remains untested in the development environment.
 - Traffic extraction is best effort; some formats require an adapter or manual paste.
 - The text editor does not support byte-exact binary replay. Base64 UTF-8 text is supported; binary or unknown encodings need another workflow.
-- Capture selectors are independent; the extension does not infer request/response pairings or correlate replay responses.
-- Validation is manual; no automatic verdict or Repeater-response capture is implemented.
+- Original scanner capture selectors are independent; matching positions are not treated as a pairing. A retest attachment stores one exchange explicitly selected in Burp.
+- Validation is manual. Evidence is attached through an explicit context-menu action; no automatic interception, correlation, or vulnerability verdict is performed.
 - No automatic polling, scan monitoring, scan launching, or active scanning is included.
 - False positive is the only remote resolution action; remote reopen and resolve are not included.
 - No bulk remote update, finding deletion, or suppression-management controls are included.
 - Notes stay local; preferences retain the latest assessment and last verified sync, not full edit history.
 - No built-in import, cross-machine annotation synchronization, or purge-all control is included.
 - JSON exports and HTML/CSV reports cover loaded data only. No multi-scan comparison or automatic refresh is included.
-- Report redaction covers common patterns, not all secrets/personal data. HTML evidence is limited to loaded scanner text and the selected finding's chosen original captures; Repeater retest evidence is not captured.
+- Report redaction covers common patterns, not all secrets/personal data. HTML can include loaded scanner text, the selected finding's chosen original captures, and explicitly saved retest attachments from the configured local folder. CSV and JSON exports omit retest HTTP messages.
+- Retest evidence permits 1 MiB requests, 2 MiB responses, and 50 attachments per finding. HTML evidence enrichment is limited to 100 attachments and 32 MiB of source messages. Binary bodies are stored exactly but omitted from text previews/reports.
 - SSO depends on the official current CLI and a usable desktop browser; it is limited to the production API origin.
 - API trust can use JVM roots, available native Windows roots, and an additional CA certificate file. Importing password-protected trust stores and configuring client TLS private keys are not implemented.
 - No extension-level proxy or direct Bearer-token controls are included.
@@ -1004,8 +1039,13 @@ Yes. **Full finding JSON** shows the entire loaded issue object. Unrecognized tr
 | 0.3.2 | Added API-scoped trusted Windows roots, an additional CA file option, classified TLS diagnostics, and real loopback TLS/hostname regression tests. |
 | 0.4.0 | Added scoped HTML/CSV validation reports, saved-note and optional evidence controls, redacted previews, summary counts, staged writes, synthetic examples, and report regression checks. |
 | 0.4.1 | Fixed oversized validation preference keys, added save read-back confirmation and legacy-key reads, and verified persistence through fresh controllers and written reports using a real Java preference store. |
+| 0.5.0 | Added explicit Burp retest evidence attachment, chosen finding ownership, file-backed raw/binary storage with hashes, a viewer/removal tab, and HTML report integration with provenance and redaction. |
+| 0.5.1 | Added direct Repeater action feedback, docked tool navigation, visible/sanitized API failure diagnostics, and actual button/factory regression checks. |
+| 0.5.2 | Replaced the direct named-tab Repeater call with runtime public-API lookup and a basic handoff preference; added return/overload compatibility checks and useful sanitized missing-member/version diagnostics. |
+| 0.5.3 | Fixed the evidence editor accessor linkage failure with public runtime lookup; retained a visible diagnostic action for unreadable exchanges, guarded availability/snapshot linkage failures, and deduplicated safe API warnings. |
+| 0.5.4 | Added pre-1.0 evidence API aliases for Burp 2022.12.6, including editor/exchange/byte access and service/response availability fallbacks; added an isolated early-API workflow test to every Python build. |
 
-This README documents version 0.4.1.
+This README documents version 0.5.4.
 
 ### References
 

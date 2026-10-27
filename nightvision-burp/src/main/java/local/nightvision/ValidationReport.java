@@ -20,7 +20,8 @@ final class ValidationReport {
         Format(String label, String extension) { this.label = label; this.extension = extension; }
         @Override public String toString() { return label; }
     }
-    record Options(String title, String analyst, boolean notes, boolean scannerEvidence, boolean httpEvidence) {
+    record Options(String title, String analyst, boolean notes, boolean scannerEvidence, boolean httpEvidence, boolean retestEvidence) {
+        Options(String title, String analyst, boolean notes, boolean scannerEvidence, boolean httpEvidence) { this(title, analyst, notes, scannerEvidence, httpEvidence, false); }
         Options {
             title = title == null || title.isBlank() ? "NightVision validation report" : title.trim();
             analyst = Objects.toString(analyst, "").trim();
@@ -30,14 +31,40 @@ final class ValidationReport {
     record Capture(String direction, String source, String note, String destination, String text) {}
     record Row(String issueId, String scanId, String title, String severity, String method, String target,
                String remoteResolution, String verdict, String updatedAt, String notes, String syncStatus,
-               String verifiedAt, String payload, String evidence, String evidenceDetails, List<Capture> captures) {
-        Row { captures = List.copyOf(captures); }
+               String verifiedAt, String payload, String evidence, String evidenceDetails, List<Capture> captures, List<EvidenceStore.ReportEvidence> retests) {
+        Row(String issueId, String scanId, String title, String severity, String method, String target,
+            String remoteResolution, String verdict, String updatedAt, String notes, String syncStatus,
+            String verifiedAt, String payload, String evidence, String evidenceDetails, List<Capture> captures) {
+            this(issueId, scanId, title, severity, method, target, remoteResolution, verdict, updatedAt, notes, syncStatus, verifiedAt, payload, evidence, evidenceDetails, captures, List.of());
+        }
+        Row { captures = List.copyOf(captures); retests = List.copyOf(retests); }
+        Row withRetests(List<EvidenceStore.ReportEvidence> entries) { return new Row(issueId, scanId, title, severity, method, target, remoteResolution, verdict, updatedAt, notes, syncStatus, verifiedAt, payload, evidence, evidenceDetails, captures, entries); }
         boolean reviewed() { return Set.of("Confirmed", "False positive", "Needs review", "Retest passed").contains(verdict); }
     }
     record Snapshot(Options options, String origin, String scanId, String scope, Instant generatedAt, List<Row> rows) {
         Snapshot { rows = List.copyOf(rows); }
     }
     record Document(Format format, String content, String previewHtml, int count) {}
+
+    /** Loads only attachments belonging to rows in the chosen scope, off the EDT and without API calls. */
+    static Snapshot attachRetests(Snapshot snapshot, EvidenceStore store) {
+        if (!snapshot.options().retestEvidence()) return snapshot;
+        List<Row> rows = new ArrayList<>(); int count = 0; long bytes = 0;
+        for (Row row : snapshot.rows()) {
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+            var target = new EvidenceStore.Target(snapshot.origin(), row.issueId(), row.scanId(), row.title(), row.target());
+            List<EvidenceStore.ReportEvidence> entries = new ArrayList<>();
+            for (var metadata : store.list(target)) {
+                if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+                bytes += (long) metadata.requestBytes() + metadata.responseBytes();
+                if (++count > 100 || bytes > 32L * 1024 * 1024)
+                    throw new IllegalArgumentException("Retest evidence exceeds 100 attachments or 32 MiB of source messages. Narrow the report scope or omit retest attachments.");
+                entries.add(store.forReport(store.read(target, metadata.id())));
+            }
+            rows.add(row.withRetests(entries));
+        }
+        return new Snapshot(snapshot.options(), snapshot.origin(), snapshot.scanId(), snapshot.scope(), snapshot.generatedAt(), rows);
+    }
 
     /** Uses one snapshot for both the preview and exported bytes, so later edits cannot alter it. */
     static Document render(Snapshot snapshot, Format format) {
@@ -46,7 +73,7 @@ final class ValidationReport {
         if (format == Format.CSV) {
             // CSV has no evidence columns; its preview must not show evidence absent from the file.
             Options options = snapshot.options();
-            snapshot = new Snapshot(new Options(options.title(), options.analyst(), options.notes(), false, false),
+            snapshot = new Snapshot(new Options(options.title(), options.analyst(), options.notes(), false, false, false),
                 snapshot.origin(), snapshot.scanId(), snapshot.scope(), snapshot.generatedAt(), snapshot.rows());
         }
         String content = format == Format.HTML ? html(snapshot, snapshot.rows().size(), false) : csv(snapshot);
@@ -108,9 +135,29 @@ final class ValidationReport {
                     out.append("<p class=\"muted\">").append(escape(text(capture.note() + (capture.destination().isBlank() ? "" : " | Capture URL: " + capture.destination())))).append("</p>");
                 }
             }
+            if (options.retestEvidence()) {
+                out.append("<h4>Saved manual retest evidence (analyst attachment)</h4>");
+                if (row.retests().isEmpty()) out.append("<p>No saved retest evidence attached.</p>");
+                for (EvidenceStore.ReportEvidence retest : row.retests()) {
+                    EvidenceStore.Metadata metadata = retest.metadata();
+                    out.append("<h4>").append(escape(text(metadata.labels().label()))).append("</h4><table><tbody>");
+                    field(out, "Evidence UUID", metadata.id()); field(out, "Burp source tool", metadata.tool());
+                    field(out, "Finding scan UUID at attachment", blank(metadata.target().scanId()));
+                    field(out, "Attached (UTC)", metadata.attachedAt()); field(out, "Tested at (analyst supplied)", blank(metadata.labels().testedAt()));
+                    field(out, "Test context", blank(metadata.labels().context())); field(out, "Captured URL", metadata.url());
+                    field(out, "HTTP service", metadata.host() + ":" + metadata.port() + " / TLS " + metadata.tls());
+                    field(out, "Response status", Integer.toString(metadata.status()));
+                    field(out, "Request bytes / SHA-256", metadata.requestBytes() + " / " + metadata.requestSha256());
+                    field(out, "Response bytes / SHA-256", metadata.responseBytes() + " / " + metadata.responseSha256());
+                    out.append("</tbody></table>");
+                    block(out, "Evidence attachment notes", metadata.labels().notes());
+                    block(out, "Retest request (Burp selection)", retest.requestText()); block(out, "Retest response (Burp selection)", retest.responseText());
+                    out.append("<p class=\"muted\">Manually associated by the analyst. Message hashes were verified locally; no vulnerability verdict was inferred.</p>");
+                }
+            }
             out.append("</section>"); checkSize(out);
         }
-        out.append("<footer class=\"muted\">NightVision Finding Validator 0.4.1. Unsaved notes, request edits, and Repeater results are excluded. "
+        out.append("<footer class=\"muted\">NightVision Finding Validator 0.5.4. Unsaved notes and current request edits are excluded. Retest messages appear only when explicitly attached and included. "
             + "Individual fields are limited to 16,000 characters with a truncation marker. Print this HTML file from your browser to save a PDF.</footer></main></body></html>");
         return out.toString();
     }

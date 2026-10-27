@@ -56,6 +56,8 @@ public final class NightVisionExtension implements BurpExtension {
     private final JLabel requestInfo = new JLabel("Select a finding."), responseInfo = new JLabel("Select a finding.");
     private boolean fillingTraffic; // Suppresses selection events while replacing capture choices.
     private final JTextField destination = new JTextField(50);
+    // Keep Repeater feedback beside the action, even when the main status line is below the viewport.
+    private final JLabel repeaterStatus = new JLabel("Review the request and destination before opening Repeater.");
     private final JComboBox<String> verdict = new JComboBox<>(new String[]{"Not reviewed", "Confirmed", "False positive", "Needs review", "Retest passed"});
     // Model rows and findings share indices. A sorted/filtered view must convert its row index.
     private final List<Finding> findings = new ArrayList<>();
@@ -69,6 +71,7 @@ public final class NightVisionExtension implements BurpExtension {
     private String namespace = "offline-demo"; // Separates demo notes from each API origin's notes.
     private String loadedScanId = ""; // The scan actually loaded, independently of later edits to Scan UUID.
     private volatile boolean unloaded;
+    private volatile EvidenceController evidence;
 
     /** Required no-argument constructor used when Burp loads the extension. */
     public NightVisionExtension() { this(NightVisionLogin::new, null); }
@@ -91,6 +94,8 @@ public final class NightVisionExtension implements BurpExtension {
             if (running != null) running.cancel(true);
             worker = null;
             client = null;
+            EvidenceController savedEvidence = evidence;
+            if (savedEvidence != null) savedEvidence.close();
             SwingUtilities.invokeLater(() -> token.setText(""));
         });
         // Burp may call initialize on another thread; Swing construction belongs on the EDT.
@@ -98,7 +103,8 @@ public final class NightVisionExtension implements BurpExtension {
             if (unloaded) return;
             buildUi();
             api.userInterface().registerSuiteTab("NightVision", root);
-            api.logging().logToOutput("NightVision validator 0.4.1 loaded. SSO uses the official NightVision CLI and its saved credential. The extension does not persist tokens or passwords. Target requests open in Repeater for manual sending.");
+            api.userInterface().registerContextMenuItemsProvider(evidence);
+            api.logging().logToOutput("NightVision validator 0.5.4 loaded. SSO uses the official NightVision CLI and its saved credential. Sign-in credentials are not copied to extension preferences. Explicit evidence attachments save raw selected HTTP messages locally. Target requests open in Repeater for manual sending.");
         });
     }
     /** Creates a monospaced plain-text editor, with editing enabled only where intended. */
@@ -171,6 +177,8 @@ public final class NightVisionExtension implements BurpExtension {
         tabs.addTab("Full finding JSON", new JScrollPane(raw));
         connectionDiagnostics.setText("Use Sign in with SSO or Use saved login to collect connection diagnostics. Credential contents and raw CLI output are omitted.");
         tabs.addTab("Connection diagnostics", new JScrollPane(connectionDiagnostics));
+        evidence = new EvidenceController(api, root, this::evidenceTargets, this::selectedEvidenceTarget, () -> unloaded || worker != null);
+        tabs.addTab("Retest evidence", evidence.panel());
         JScrollPane tablePane = new JScrollPane(table);
         tablePane.setColumnHeaderView(table.getTableHeader());
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tablePane, tabs);
@@ -179,6 +187,8 @@ public final class NightVisionExtension implements BurpExtension {
         // Local annotations and the explicit remote update use separate actions and storage paths.
         JPanel bottom = new JPanel(); bottom.setLayout(new BoxLayout(bottom, BoxLayout.Y_AXIS));
         bottom.add(row(new JLabel("Destination URL (verify host / port / TLS)"), destination, button("Open in Repeater", this::repeater)));
+        repeaterStatus.putClientProperty("html.disable", Boolean.TRUE);
+        bottom.add(row(repeaterStatus));
         bottom.add(row(new JLabel("Local validation"), verdict, button("Save local validation", this::saveValidation),
             new JLabel("Replay manually in Repeater; then record your result here.")));
         bottom.add(row(button("Mark false positive in NightVision", this::markFalsePositive),
@@ -451,7 +461,8 @@ public final class NightVisionExtension implements BurpExtension {
         Finding f = selected();
         if (f == null) {
             for (JTextArea a : List.of(details, request, response, raw, notes)) a.setText("");
-            fillTraffic(null); destination.setText(""); verdict.setSelectedIndex(0); return;
+            fillTraffic(null); destination.setText(""); verdict.setSelectedIndex(0);
+            if (evidence != null) evidence.selectionChanged(); return;
         }
         JsonObject a = annotation(f.id());
         details.setText(f.title() + "\nSeverity: " + f.severity() + "\nIssue ID: " + f.id()
@@ -467,19 +478,80 @@ public final class NightVisionExtension implements BurpExtension {
         String state = Finding.s(a, "status"); verdict.setSelectedItem(state.isBlank() ? "Not reviewed" : state);
         notes.setText(Finding.s(a, "notes"));
         for (JTextArea text : List.of(details, request, response, raw, notes)) text.setCaretPosition(0);
+        if (evidence != null) evidence.selectionChanged();
     }
+    /** Immutable evidence ownership comes from loaded data, never a later edited Scan UUID field. */
+    private EvidenceStore.Target evidenceTarget(Finding finding) {
+        String scan = Finding.s(finding.data(), "scan_id");
+        return new EvidenceStore.Target(namespace, finding.id(), scan.isBlank() ? loadedScanId : scan, finding.title(), finding.targetUrl());
+    }
+    private List<EvidenceStore.Target> evidenceTargets() { return findings.stream().map(this::evidenceTarget).toList(); }
+    private EvidenceStore.Target selectedEvidenceTarget() { Finding finding = selected(); return finding == null ? null : evidenceTarget(finding); }
     /** Opens an edited request in a Burp Repeater tab; the analyst must click Send there. */
     private void repeater() {
-        Finding f = selected(); if (f == null) { error("Select a finding first."); return; }
+        repeaterFeedback("Preparing the request for Repeater…");
+        String stage = "selecting the finding";
+        String handoffApi = "Repeater method not resolved yet";
         try {
-            URI u = Finding.destination(destination.getText());
-            String message = Finding.prepareRequest(request.getText());
+            if (unloaded) { repeaterFeedback("Error: This extension has been unloaded. Load the current JAR again."); return; }
+            Finding f = selected();
+            if (f == null) { repeaterFeedback("Error: Select a finding first."); return; }
+            final URI u;
+            final String message;
+            try {
+                u = Finding.destination(destination.getText());
+                message = Finding.prepareRequest(request.getText());
+            } catch (IllegalArgumentException e) {
+                // Only our controlled validation text is safe to display verbatim.
+                repeaterFeedback("Error: " + e.getMessage()); return;
+            }
             int port = u.getPort() == -1 ? (u.getScheme().equalsIgnoreCase("https") ? 443 : 80) : u.getPort();
             // The chosen destination controls the actual service independently of the request's Host header.
-            HttpService service = HttpService.httpService(u.getHost(), port, u.getScheme().equalsIgnoreCase("https"));
-            api.repeater().sendToRepeater(HttpRequest.httpRequest(service, message), "NV " + f.id().substring(0, Math.min(8, f.id().length())));
-            status.setText("Opened in Repeater. Verify the request, then click Send there. No validation result was inferred.");
-        } catch (RuntimeException e) { error(e instanceof IllegalArgumentException ? e.getMessage() : "Could not create the Burp request. Check the request and destination."); }
+            stage = "creating the HTTP service";
+            HttpService service = Objects.requireNonNull(HttpService.httpService(u.getHost(), port, u.getScheme().equalsIgnoreCase("https")));
+            stage = "building the HTTP request";
+            HttpRequest prepared = Objects.requireNonNull(HttpRequest.httpRequest(service, message));
+            String caption = "NV " + f.id().substring(0, Math.min(8, f.id().length()));
+            stage = "resolving the installed Repeater API";
+            RepeaterBridge.Resolved handoff = RepeaterBridge.resolve();
+            handoffApi = handoff.description();
+            stage = "handing the request to Repeater";
+            handoff.send(api, prepared, caption);
+            // Montoya creates the tab but offers no tool-focus API. Select a normal docked Swing tab
+            // when available. An unusual/detached layout must never cause a second request handoff.
+            boolean focused = focusRepeater();
+            repeaterFeedback((focused ? "Opened a Repeater tab" : "Created a Repeater tab")
+                + (handoff.named() ? " " + caption : " (Burp default tab name)")
+                + (focused ? ". Verify the request, then click Send." : "; select Repeater, verify the request, then click Send."));
+        } catch (RuntimeException | LinkageError e) {
+            // NoSuchMethodError/AbstractMethodError are Errors, so RuntimeException alone misses
+            // API compatibility failures and can leave a Swing button apparently doing nothing.
+            String type = e.getClass().getSimpleName();
+            String text = e instanceof LinkageError ? "Burp API compatibility problem (" + type + ")."
+                : "Repeater handoff failed (" + type + ").";
+            repeaterFeedback("Error: " + text + " See Extensions > NightVision > Errors.");
+            String missing = RepeaterBridge.missingMember(e);
+            try { api.logging().logToError("NightVision 0.5.4: failed while " + stage + " (" + type
+                + "). Burp version: " + RepeaterBridge.hostVersion(api) + ". API: " + handoffApi + (missing.isBlank() ? "" : ". Missing member: " + missing)
+                + ". Report this stage, API signature, and your exact Burp version. Raw request and other exception text omitted."); }
+            catch (RuntimeException | LinkageError ignored) { /* The on-screen error remains if logging is unavailable. */ }
+            if (!GraphicsEnvironment.isHeadless() && root.isShowing())
+                JOptionPane.showMessageDialog(root, text + "\nStage: " + stage
+                    + "\nSee Extensions > NightVision > Errors. No retry was attempted.", "Open in Repeater", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    /** Mirrors action feedback at its control and in the main status line. */
+    private void repeaterFeedback(String text) { repeaterStatus.setText(text); status.setText(text); }
+    /** Best-effort docked tool navigation; inspect only ancestors of our own registered component. */
+    private boolean focusRepeater() {
+        try {
+            for (Component c = root; c != null; c = c.getParent()) if (c instanceof JTabbedPane tabs)
+                for (int i = 0; i < tabs.getTabCount(); i++)
+                    if ("Repeater".equals(tabs.getTitleAt(i)) && tabs.isEnabledAt(i)) {
+                        tabs.setSelectedIndex(i); return true;
+                    }
+        } catch (RuntimeException | LinkageError ignored) { /* Handoff already succeeded; retain its receipt. */ }
+        return false;
     }
     /** Computes the full digest of API origin plus issue ID, keeping demo and service data separate. */
     private byte[] annotationDigest(String id) {
@@ -604,26 +676,30 @@ public final class NightVisionExtension implements BurpExtension {
         JCheckBox savedNotes = new JCheckBox("Include saved analyst notes", true);
         JCheckBox scanner = new JCheckBox("Include scanner payload and evidence text (HTML)", false);
         JCheckBox http = new JCheckBox("Include the selected finding's current capture choices (HTML)", false);
+        JCheckBox retests = new JCheckBox("Include saved manual retest attachments for findings in scope (HTML)", true);
         http.setToolTipText("Includes the selected request and response only if that finding belongs to the chosen report scope.");
         http.setEnabled(selected() != null);
         format.addActionListener(e -> {
             boolean html = format.getSelectedItem() == ValidationReport.Format.HTML;
             scanner.setEnabled(html); http.setEnabled(html && selected() != null);
-            if (!html) { scanner.setSelected(false); http.setSelected(false); }
+            retests.setEnabled(html);
+            if (!html) { scanner.setSelected(false); http.setSelected(false); retests.setSelected(false); }
         });
         JPanel form = new JPanel(); form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
         form.add(row(new JLabel("Title"), title)); form.add(row(new JLabel("Analyst (optional)"), analyst));
         form.add(row(new JLabel("Format"), format, new JLabel("Scope"), scope));
-        form.add(row(reviewed, savedNotes)); form.add(row(scanner)); form.add(row(http));
+        form.add(row(reviewed, savedNotes)); form.add(row(scanner)); form.add(row(http)); form.add(row(retests));
         form.add(row(new JLabel("Save local validation first. Unsaved notes and request edits are excluded.")));
-        form.add(row(new JLabel("HTTP evidence is the original NightVision capture; Repeater results are not captured.")));
+        form.add(row(new JLabel("Original scanner captures and explicitly attached Burp retests are labeled separately.")));
         form.add(row(new JLabel("Common credential patterns are redacted. Review remaining content before sharing.")));
         if (JOptionPane.showConfirmDialog(root, form, "Validation report", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
         try {
-            ValidationReport.Options options = new ValidationReport.Options(title.getText(), analyst.getText(), savedNotes.isSelected(), scanner.isSelected(), http.isSelected());
+            ValidationReport.Options options = new ValidationReport.Options(title.getText(), analyst.getText(), savedNotes.isSelected(), scanner.isSelected(), http.isSelected(), retests.isSelected());
             ValidationReport.Snapshot snapshot = reportSnapshot((ReportScope) scope.getSelectedItem(), reviewed.isSelected(), options);
             ValidationReport.Format selectedFormat = (ValidationReport.Format) format.getSelectedItem();
-            background("Preparing validation report…", () -> ValidationReport.render(snapshot, selectedFormat), this::previewReport);
+            Path evidenceFolder = options.retestEvidence() ? evidence.folderPath() : null;
+            background("Preparing validation report…", () -> ValidationReport.render(
+                options.retestEvidence() ? ValidationReport.attachRetests(snapshot, new EvidenceStore(evidenceFolder)) : snapshot, selectedFormat), this::previewReport);
         } catch (RuntimeException e) { error(e.getMessage()); }
     }
 
