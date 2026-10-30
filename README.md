@@ -1,11 +1,12 @@
 # NightVision Finding Validator for Burp Suite
 
-**Extension version:** 0.5.4  
-**Documentation updated:** October 26, 2026
+**Extension version:** 0.5.8  
+**Author:** Kevin Thomas  
+**Documentation updated:** October 28, 2026
 
-NightVision Finding Validator brings NightVision scan findings into Burp Suite for manual review. Connect to NightVision, select a scan, examine the evidence, open a finding's HTTP request in Repeater, and record your assessment. When you determine that a finding is a false positive, you can explicitly update its resolution in NightVision and verify that the change saved.
+NightVision Finding Validator brings NightVision scan findings into Burp Suite for manual review. Connect to NightVision, select a scan, examine the evidence, open a finding's HTTP request in Repeater, and record your assessment. Use the separate remote buttons to mark a finding false positive or won't fix in NightVision and verify that the change saved.
 
-The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.5.4 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
+The extension is a Java JAR loaded inside Burp Suite. It is not a separate website, monitoring service, or scanner. It connects directly to the NightVision REST API; using MCP is not required. Version 0.5.8 supports browser SSO through the official NightVision CLI, current YAML/JSON CLI configuration, legacy token files, and manual API tokens.
 
 ## Contents
 
@@ -66,8 +67,9 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Open in Repeater | Creates a Repeater tab containing the request for manual sending. |
 | Local validation | Lets you choose an analyst assessment for the selected finding. |
 | Analyst notes | Holds your test observations and reasoning. |
-| Save local validation | Saves the local assessment, notes, and timestamp in Burp's extension preferences. |
-| Mark false positive in NightVision | Updates the selected issue's resolution and retrieves it again to verify the result. |
+| Save local validation | Replaces the selected issue's previous saved assessment, notes, and timestamp in Burp's extension preferences. |
+| Mark false positive in NightVision | Sets resolution 2 for the selected issue, then retrieves it to verify the result. |
+| Mark won't fix in NightVision | Sets resolution 4 for the selected issue, then retrieves it to verify the result. |
 | Export local validations | Saves loaded finding identifiers and saved local annotations as JSON. |
 | Validation report… | Previews and saves scoped CSV/HTML reports with saved verdicts/notes, summary counts, common credential redaction, and optional original evidence in HTML. |
 | Offline demo | Loads a synthetic finding without requiring an API token. |
@@ -85,7 +87,7 @@ The extension is a Java JAR loaded inside Burp Suite. It is not a separate websi
 | Java runtime | Targets Java 17 bytecode. Burp must run on Java 17 or later; a compatible Burp installation's bundled runtime can provide this. |
 | NightVision access | A NightVision account with access to the scans and issues, using CLI SSO login or a manual API token. |
 | SSO browser login | The current official NightVision CLI installed on the same machine and OS account as Burp, with an available desktop browser. |
-| Remote updates | Permission to update issues is also required for the false-positive action. |
+| Remote updates | Permission to update issues is also required for the remote resolution actions. |
 | Network access | HTTPS access from the Burp machine to the configured NightVision API. Access to the target application is needed separately for Repeater testing. |
 | Desktop environment | A suitable Windows or Linux desktop capable of running Burp. The extension does not use distribution-specific services. |
 
@@ -101,10 +103,10 @@ Rebuilding requires JDK 17 or 21 and either Python 3.8 or later for the included
 
 ### Install the prebuilt JAR
 
-1. Extract `nightvision-burp-extension-v0.5.4.zip`.
+1. Extract `nightvision-burp-extension-v0.5.8.zip`.
 2. Open Burp Suite and go to **Extensions → Installed → Add**.
 3. Choose **Java** as the extension type.
-4. Select `nightvision-burp/dist/nightvision-burp-0.5.4.jar` from the extracted package.
+4. Select `nightvision-burp/dist/nightvision-burp-0.5.8.jar` from the extracted package.
 5. Click **Next** and inspect the extension's **Output** and **Errors** tabs.
 6. Close the installer and open the new **NightVision** tab.
 
@@ -215,7 +217,7 @@ SSO and saved-login actions connect only to NightVision’s production API at `h
 
 Browser sign-in and CLI login can succeed while the Java API connection fails with `SSLHandshakeException`. They use different TLS implementations and may use different trusted-certificate stores. A company TLS-inspection gateway can be one cause, but the exception can also mean an expired certificate, a hostname mismatch, or a protocol problem.
 
-Version 0.5.4 retains Java’s default trusted roots and adds these API-specific settings:
+Version 0.5.8 retains Java’s default trusted roots and adds these API-specific settings:
 
 | Control | Behavior |
 | --- | --- |
@@ -405,7 +407,7 @@ For ordinary replay, align the destination, request target, and Host header with
 7. Compare the result with the evidence and an appropriate control request.
 8. Return to the extension and record your assessment.
 
-A receipt directly below the button confirms the handoff and naming mode. Version 0.5.4 resolves the installed public Repeater API before invocation, preferring the basic one-request method. It avoids a direct compile-time dependency on the named-tab method. The available overload and actual return type are resolved before a single handoff; there is no fallback retry after a method has been invoked. Invalid inputs are reported there. Burp handoff/API compatibility failures also show an error dialog and a sanitized stage/error type, available API signature, bounded Burp version when readable, and allowlisted missing Montoya member signature under **Extensions → NightVision → Errors**. Other exception text and request contents are not logged. A failed handoff or tab-navigation attempt is never retried automatically. Detached/custom Burp layouts may require selecting Repeater manually.
+A receipt directly below the button confirms the handoff and naming mode. Version 0.5.8 resolves the installed public Repeater API before invocation, preferring the basic one-request method. It avoids a direct compile-time dependency on the named-tab method. The available overload and actual return type are resolved before a single handoff; there is no fallback retry after a method has been invoked. Invalid inputs are reported there. Burp handoff/API compatibility failures also show an error dialog and a sanitized stage/error type, available API signature, bounded Burp version when readable, and allowlisted missing Montoya member signature under **Extensions → NightVision → Errors**. Other exception text and request contents are not logged. A failed handoff or tab-navigation attempt is never retried automatically. Detached/custom Burp layouts may require selecting Repeater manually.
 
 Opening a Repeater tab does not send the request. Clicking the action again creates another tab. Existing Repeater tabs remain independently available after selection changes or disconnection.
 
@@ -422,6 +424,7 @@ The NightVision API token is never inserted into target requests. Target authent
 | Not reviewed | Review has not been completed. | No. |
 | Confirmed | You reproduced and assessed the issue. | No. |
 | False positive | Your review concluded the issue is not valid in the tested context. | No. |
+| Won't fix | Your review accepts the finding without planning a fix. | No. |
 | Needs review | More investigation or context is needed. | No. |
 | Retest passed | Your retest did not reproduce the original issue under the checked conditions. | No. |
 
@@ -461,6 +464,8 @@ Different issue UUIDs have separate notes, even when findings have similar title
 
 Only the latest assessment and notes are kept, not a complete edit history. After a verified remote update, later local saves retain the last `nightvision_sync` metadata. That metadata records a past operation; it is not continuous synchronization and does not prove that no one changed NightVision afterward.
 
+Edit or replace the notes in the editor, then click **Save local validation**. The button replaces the saved status and complete note text for the same API origin and issue UUID, including clearing notes when the editor is empty. Repeat saves confirm **Previous status and notes replaced**. Generate a new report after saving; an existing report file or preview remains a snapshot. HTML shows **Latest saved analyst notes**, and CSV uses the same current saved record. Independent evidence attachment notes remain with their attachments, listed newest first by attachment time.
+
 ### Size limits and clearing
 
 An annotation is limited to 7,000 characters and 7,000 UTF-8 bytes after JSON serialization, including metadata. Escaping, non-ASCII text, and sync fields consume part of the allowance. Shorten notes when a size error appears.
@@ -468,6 +473,8 @@ An annotation is limited to 7,000 characters and 7,000 UTF-8 bytes after JSON se
 To clear the visible assessment, choose **Not reviewed**, empty the notes, and save. This saves a new value; it does not delete the underlying preference entry or prior sync metadata. There is no delete-all-annotations control.
 
 ## 11. Mark a finding false positive in NightVision
+
+Version 0.5.7 corrects a reversed resolution mapping in earlier versions. Those versions sent `1` (Resolved) while labeling it False positive. Review any findings changed with the older button in NightVision, then explicitly reclassify them if needed. The upgrade does not automatically change remote findings, saved local verdicts, or historical sync receipts.
 
 ### Use the remote action
 
@@ -478,7 +485,13 @@ To clear the visible assessment, choose **Not reviewed**, empty the notes, and s
 
 The button means **False positive** regardless of the local dropdown's current value. Selecting **False positive** and clicking **Save local validation** alone does not change NightVision.
 
-The remote action needs a live API connection and update permission. The installed offline demo cannot make a real update. Remote reopen and resolved actions are not implemented.
+Both remote actions need a live API connection and update permission. The installed offline demo cannot make a real update. Remote reopen and resolved actions are not implemented.
+
+### Mark won't fix in NightVision
+
+Select the issue and click **Mark won't fix in NightVision** beside the false-positive button. This sends `PUT /api/v1/issues/{issue_id}/` with only `{"resolution":4}` and uses a separate GET to verify the selected UUID and code `4`. Only after successful verification does the extension display **Won't fix (4)**, save the local **Won't fix** assessment and analyst notes, and record a code-4 sync receipt. Notes remain local.
+
+Both buttons use the classification in their own labels, independently of the local dropdown. Choosing **Won't fix** and **Save local validation** saves locally only. Won't fix counts as reviewed in report summaries and reviewed-only scopes. A failed or mismatched read-back leaves the previous saved assessment intact and preserves unsaved notes. Neither action retries the write automatically.
 
 ### Update and verification requests
 
@@ -489,7 +502,7 @@ PUT /api/v1/issues/{issue_id}/
 Authorization: Token <your-api-token>
 Content-Type: application/json
 
-{"resolution":1}
+{"resolution":2}
 ```
 
 It then retrieves the same record:
@@ -498,12 +511,12 @@ It then retrieves the same record:
 GET /api/v1/issues/{issue_id}/
 ```
 
-Success is reported only when the retrieved issue ID matches and its resolution is `1`. NightVision's own public source documents `1=false_positive`. The extension also displays `0` as **Open** and `2` as **Resolved**. Other values are shown numerically without an inferred name.
+Success is reported only when the retrieved issue ID matches and its resolution is `2`. The deployed NightVision web app uses `0=Open`, `1=Resolved`, `2=False positive`, and `4=Won't fix`. Other values are shown numerically without an inferred name. The public MCP type comments have an outdated mapping that reverses `1` and `2`; they are not the authority for this write.
 
 ### After verified success
 
 - The refreshed issue replaces the loaded record.
-- **NightVision resolution** displays **False positive (1)**.
+- **NightVision resolution** displays **False positive (2)**.
 - The local assessment becomes **False positive**.
 - Analyst notes and an update timestamp are saved locally.
 - Local `nightvision_sync` fields record the verified resolution and verification timestamp.
@@ -571,7 +584,7 @@ Example after a verified false-positive update:
     {
       "issue_id": "11111111-1111-4111-8111-111111111111",
       "scan_id": "22222222-2222-4222-8222-222222222222",
-      "nightvision_resolution": "1",
+      "nightvision_resolution": "2",
       "finding": "Demo: reflected input for manual review",
       "target": "https://example.invalid:443/search?q=nv-marker",
       "local_validation": {
@@ -580,7 +593,7 @@ Example after a verified false-positive update:
         "updated_at": "2026-10-22T22:58:00Z",
         "nightvision_sync": {
           "status": "verified",
-          "resolution": 1,
+          "resolution": 2,
           "verified_at": "2026-10-22T22:58:00Z"
         }
       }
@@ -606,7 +619,7 @@ There is no built-in import or scheduled export. The JSON is a portable record f
 
 Explore detail tabs, filtering, sorting, request editing, Repeater handoff, local annotation, and export. Demo notes use a separate namespace and can remain available when the installed demo is loaded again.
 
-Loading the sample makes no API request. **Fetch full finding** reports that the sample already contains its details. The remote false-positive action reports that a live connection is required.
+Loading the sample makes no API request. **Fetch full finding** reports that the sample already contains its details. The remote resolution buttons report that a live connection is required.
 
 ### Conversation preview versus installed extension
 
@@ -628,7 +641,7 @@ The Java extension runs inside Burp, persists annotations in Burp preferences, a
 | Local status and notes | Burp extension preferences after saving. | No. |
 | Last verified sync metadata | Local annotation after successful verification. | No. |
 | Explicit retest attachments | User-selected local evidence folder: raw message files and metadata, including labels, context, notes, hashes, and attachment time. The folder path alone is remembered in preferences. | No. |
-| False-positive resolution | NightVision after the explicit update succeeds. | Yes: `{"resolution":1}`. |
+| Remote resolution | NightVision after the selected remote action succeeds. | Yes: `{"resolution":2}` for false positive or `{"resolution":4}` for won't fix. |
 | Validation export | User-selected file path. | No. |
 | HTML/CSV report | User-selected file path; prepared snapshot and preview in memory. Common credential patterns are redacted; optional original and saved retest evidence appears only in HTML. | No. |
 
@@ -666,7 +679,7 @@ Repeater handles target traffic after manual sending. Networks requiring a proxy
 | Cancel sign-in | No additional API operation. | Cancels the pending connection and stops an extension-launched CLI login process; no logout or token revocation. |
 | Load findings | `GET /api/v1/issues/` | Uses the selected scan UUID and `page_size=100`. |
 | Fetch full finding | `GET /api/v1/issues/{id}/` | Retrieves one current issue record. |
-| Mark false positive in NightVision | `PUT`, then `GET`, at `/api/v1/issues/{id}/` | Sets `resolution` to `1`, then verifies the saved ID and value. |
+| Mark false positive / won't fix in NightVision | `PUT`, then `GET`, at `/api/v1/issues/{id}/` | Sets `resolution` to `2` or `4` for the clicked button, then verifies the saved ID and value. |
 | Save local validation | No API request. | Writes preferences. |
 | Filter or sort | No API request. | Changes the table view. |
 | Export local validations | No API request. | Writes a local file. |
@@ -728,11 +741,11 @@ Pagination loops, collection limits, invalid JSON, and missing result arrays pro
 | Old scan's findings remain | Click **Load findings** after changing the scan and confirm success. Failed loads can retain the prior table. |
 | Request or response is blank | Use 0.2.1 or newer, select the finding, and click **Fetch full finding**. Read the label above the editor; inspect `extra_info.http_requests` and `extra_info.http_responses` in JSON. Empty arrays mean no captures were returned. Unsupported bodies need the original text or another adapter. |
 | Request format error | Paste raw HTTP beginning with a request line, not a curl command. |
-| Attach retest evidence is absent or fails | Check the request/response editor’s Extensions submenu after receiving a response. Version 0.5.4 supports both requestResponse() and the getRequestResponse() accessor in Burp 2022.12.6, plus the early exchange and byte getter names. A remaining API failure keeps a diagnostic action visible; click it and inspect the sanitized error log. No other exchange is substituted. |
+| Attach retest evidence is absent or fails | Check the request/response editor’s Extensions submenu after receiving a response. Version 0.5.8 supports both requestResponse() and the getRequestResponse() accessor in Burp 2022.12.6, plus the early exchange and byte getter names. A remaining API failure keeps a diagnostic action visible; click it and inspect the sanitized error log. No other exchange is substituted. |
 | Open in Repeater seems to do nothing | Read the receipt directly below the button. Select Repeater manually if it is undocked. For a handoff failure, check Extensions → NightVision → Errors for the stage/type. Save unsaved notes before replacing the extension. |
 | Replay reaches an unexpected host or path | Check destination, Repeater service, request line, and Host header independently. |
 | Replay returns a login page, 401, or 403 | Refresh target application credentials. The NightVision API token does not authenticate the target. |
-| Local save does not change NightVision | Expected: use the separate remote false-positive action. |
+| Local save does not change NightVision | Expected: use the separate remote false-positive or won't-fix button. |
 | Update not confirmed or not verified | Fetch the full record and inspect remote state before retrying; the write may already have applied. |
 | Remote update succeeded but notes failed to save | Copy the notes before leaving and investigate the local preference failure. |
 | Notes too long | Shorten them; serialized metadata and escaping count toward the limit. |
@@ -781,7 +794,7 @@ The same source can be used on a suitable Kali, Ubuntu, or other Linux desktop. 
 The script creates:
 
 ```text
-dist/nightvision-burp-0.5.4.jar
+dist/nightvision-burp-0.5.8.jar
 ```
 
 It performs these steps:
@@ -824,7 +837,7 @@ mvn clean package
 Load the shaded output:
 
 ```text
-target/nightvision-burp-0.5.4.jar
+target/nightvision-burp-0.5.8.jar
 ```
 
 Maven includes Gson and SnakeYAML and treats Montoya as provided. The standalone regression checks are not registered with Maven Surefire. Use `tools/build.py` to run those checks. The Python build was exercised during development; the Maven alternative was not separately executed in that environment.
@@ -840,7 +853,7 @@ sha256sum -c SHA256SUMS.txt
 On Windows, from the project directory:
 
 ```powershell
-Get-FileHash .\dist\nightvision-burp-0.5.4.jar -Algorithm SHA256
+Get-FileHash .\dist\nightvision-burp-0.5.8.jar -Algorithm SHA256
 Get-Content .\dist\SHA256SUMS.txt
 ```
 
@@ -848,9 +861,11 @@ Compare the reported hash with the text file. That checksum describes the distri
 
 ## 18. Verification and test coverage
 
-Version 0.5.4 passed **403 checks**, without external NightVision API calls, covering:
+Version 0.5.8 passed **464 checks**, without external NightVision API calls, covering:
 
 - API endpoints, queries, token headers, and update payloads.
+- Actual won't-fix button clicks: code-4-only writes, separate read-back gating, permission/mismatch failures, no retries, preserved notes, saved receipt/reload, and reviewed HTML/CSV output.
+- Repeated actual Save-button clicks against a real Java preference store: one current record per issue, replacement and clearing of notes, fresh-instance reload, regenerated HTML/CSV files and previews, immutable older snapshots, preserved remote-sync receipts, and cleared notes taking precedence over legacy records.
 - Pagination, loops, malformed collections, and credential boundaries.
 - Rejection of pagination links that change origin, port, scheme, or collection path.
 - Errors that omit raw response bodies and token values.
@@ -862,7 +877,7 @@ Version 0.5.4 passed **403 checks**, without external NightVision API calls, cov
 - NightVision structured request/response arrays, multiple captures, HAR-style headers, cookies, postData, content, and base64 UTF-8 bodies.
 - Escaped paths, duplicate headers, Unicode, body newline preservation, unsupported bodies, and malformed captures.
 - Mocked list-to-detail loading that populates both editors, capture selectors, per-request destinations, request edit preservation while browsing responses, and clearing on disconnect.
-- Issue-specific false-positive writes with only the resolution field.
+- Issue-specific false-positive and won't-fix writes with only `resolution: 2` or `resolution: 4`, deployed resolution labels (0/1/2/4), corrected UI/report/sync receipts, and rejection of resolved (1) read-backs.
 - Permission failures, wrong read-back resolution, mismatched ID, and failed verification.
 - Distinction between an accepted update and a verified saved result.
 - Swing tab registration, demo, filtering, notes, and remote-status display.
@@ -902,7 +917,7 @@ The API classes bundled in the official **Burp Community 2022.12.6** JAR were ad
 | Path | Purpose |
 | --- | --- |
 | `README.md` | This feature and operations guide. |
-| `dist/nightvision-burp-0.5.4.jar` | Prebuilt extension. |
+| `dist/nightvision-burp-0.5.8.jar` | Prebuilt extension. |
 | `dist/SHA256SUMS.txt` | Distributed JAR hash. |
 | `pom.xml` | Maven dependencies and shaded build. |
 | `tools/build.py` | Build and offline-check runner. |
@@ -924,6 +939,7 @@ The API classes bundled in the official **Burp Community 2022.12.6** JAR were ad
 | `src/main/java/local/nightvision/ValidationReport.java` | Immutable report model, HTML/CSV rendering, spreadsheet text protection, and staged file writes. |
 | `src/main/java/local/nightvision/ReportRedactor.java` | Common credential-pattern redaction for report fields. |
 | `src/test/java/local/nightvision/ReportSelfTest.java` | Report generation, scoping, escaping/redaction, and file-write regression checks. |
+| `src/test/java/local/nightvision/ResolutionSelfTest.java` | Won't-fix request payloads, actual button verification/failure behavior, saved receipt/reload, and reviewed HTML/CSV reports. |
 | `src/test/java/local/nightvision/PersistenceSelfTest.java` | Real Java preference limits, save/read-back, reload-to-report, legacy compatibility, and failed-write regression checks. |
 | `src/main/java/local/nightvision/TlsSupport.java` | API-scoped trust, Windows roots, additional CA loading, hostname-preserving trust delegation, and safe TLS diagnostics. |
 | `src/test/java/local/nightvision/TlsSelfTest.java` | Real local HTTPS trust, hostname, isolation, and UI recovery tests. |
@@ -958,7 +974,7 @@ Apache 2.0 license texts for Gson and SnakeYAML are included in the package and 
 - Original scanner capture selectors are independent; matching positions are not treated as a pairing. A retest attachment stores one exchange explicitly selected in Burp.
 - Validation is manual. Evidence is attached through an explicit context-menu action; no automatic interception, correlation, or vulnerability verdict is performed.
 - No automatic polling, scan monitoring, scan launching, or active scanning is included.
-- False positive is the only remote resolution action; remote reopen and resolve are not included.
+- Remote false-positive (2) and won't-fix (4) actions are included; remote reopen and resolve are not included.
 - No bulk remote update, finding deletion, or suppression-management controls are included.
 - Notes stay local; preferences retain the latest assessment and last verified sync, not full edit history.
 - No built-in import, cross-machine annotation synchronization, or purge-all control is included.
@@ -975,9 +991,9 @@ Apache 2.0 license texts for Gson and SnakeYAML are included in the package and 
 
 ### Does Save local validation update NightVision?
 
-No. It saves locally. The remote false-positive action is a separate button and requires update permission.
+No. It saves locally. The remote false-positive and won't-fix actions use separate buttons and require update permission.
 
-### Will a local False positive assessment synchronize later?
+### Will a local False positive or Won't fix assessment synchronize later?
 
 No. There is no queued or automatic synchronization.
 
@@ -1044,8 +1060,12 @@ Yes. **Full finding JSON** shows the entire loaded issue object. Unrecognized tr
 | 0.5.2 | Replaced the direct named-tab Repeater call with runtime public-API lookup and a basic handoff preference; added return/overload compatibility checks and useful sanitized missing-member/version diagnostics. |
 | 0.5.3 | Fixed the evidence editor accessor linkage failure with public runtime lookup; retained a visible diagnostic action for unreadable exchanges, guarded availability/snapshot linkage failures, and deduplicated safe API warnings. |
 | 0.5.4 | Added pre-1.0 evidence API aliases for Burp 2022.12.6, including editor/exchange/byte access and service/response availability fallbacks; added an isolated early-API workflow test to every Python build. |
+| 0.5.5 | Made local-validation replacement explicit in the UI and save receipt, labeled reports with the latest saved notes, explained report regeneration, and verified repeated saves, clearing, reload, and written reports with real preferences. |
+| 0.5.6 | Added Kevin Thomas author credit in the extension interface, source entry point, README, JAR/Maven metadata, and HTML report footer. |
+| 0.5.7 | Corrected resolved/false-positive codes in writes, read-back checks, and labels; added won't-fix display and regression checks for resolved read-backs. |
+| 0.5.8 | Added a separate verified won't-fix (4) button, local validation label, saved sync receipt, reviewed report support, and actual-button/transport regression checks. |
 
-This README documents version 0.5.4.
+This README documents version 0.5.8.
 
 ### References
 
@@ -1056,11 +1076,12 @@ This README documents version 0.5.4.
 - [Java extended trust manager and endpoint checks](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/javax/net/ssl/X509ExtendedTrustManager.html)
 - [NightVision REST API reference](https://docs.nightviz.ai/reference/)
 - [NightVision public OpenAPI document](https://docs.nightviz.ai/openapi/nightvision-rest-api.yaml)
-- [NightVision's resolution mapping in its public source](https://github.com/nvsecurity/nightvision-mcp/blob/main/src/types/index.ts)
+- [NightVision web application (deployed resolution mapping)](https://app.nightvision.net/)
+- [NightVision MCP type comments (outdated resolution labels)](https://github.com/nvsecurity/nightvision-mcp/blob/main/src/types/index.ts)
 - [NightVision structured evidence handling in its own client](https://github.com/nvsecurity/nightvision-mcp/blob/main/src/services/issue-service.ts)
 - [NightVision scan findings and evidence](https://docs.nightviz.ai/welcome/key-concepts/dast-scans/)
 - [PortSwigger: install a custom extension](https://portswigger.net/burp/documentation/desktop/extend-burp/extensions/installing/manual-install)
 - [PortSwigger: Montoya Repeater API](https://portswigger.github.io/burp-extensions-montoya-api/javadoc/burp/api/montoya/repeater/Repeater.html)
 - [PortSwigger: extension development setup](https://portswigger.net/burp/documentation/desktop/extend-burp/extensions/creating/set-up/manual-setup)
 
-API behavior and resolution mappings were reviewed on October 22, 2026. Structured capture handling was checked against NightVision's public client on October 26, 2026. The implemented source is the authority for this release's behavior; later platform changes may require an extension update.
+API endpoints were initially reviewed on October 22, 2026. Resolution values were corrected on October 28, 2026 using the deployed NightVision web app and the public OpenAPI enum; see the false-positive upgrade note above. Structured capture handling was checked against NightVision's public client on October 26, 2026. The implemented source is the authority for this release's behavior; later platform changes may require an extension update.
