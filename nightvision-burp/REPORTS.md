@@ -1,4 +1,4 @@
-# Validation reports — version 0.5.4
+# Validation reports — version 0.5.8
 
 The extension creates HTML reports for review and printing, and CSV files for
 spreadsheet analysis. Reports use the findings already loaded in Burp and the
@@ -9,7 +9,7 @@ does not change a finding in NightVision.
 
 Version 0.4.1 fixed the earlier validation keys exceeding Java's preference-key
 limit. Copy any notes still visible before unloading the older extension, then
-load `dist/nightvision-burp-0.5.4.jar`. Re-enter any lost verdict/notes and click
+load `dist/nightvision-burp-0.5.8.jar`. Re-enter any lost verdict/notes and click
 **Save local validation**. Confirm the status says **Validation saved and read
 back from Burp preferences** before creating the report.
 
@@ -17,6 +17,23 @@ Records previously accepted by a lenient host remain readable. Rejected writes
 were never stored and cannot be recovered automatically. Failed saves now keep
 your edits visible and show an error. HTML/CSV reports read their validation
 fields from saved records, with **Include saved analyst notes** enabled for note text.
+
+## Replacing a saved validation
+
+**Save local validation** replaces the selected issue's previous saved status,
+notes, and saved timestamp. Edit or replace the note text before clicking Save;
+text left in the editor remains part of the replacement. Saving an empty notes
+field clears its saved text. Each API origin and issue UUID has one current
+assessment, without an appended note history.
+
+HTML labels this field **Latest saved analyst notes**; CSV also uses only the
+current saved record. After another save, generate a new report and replace the
+old report file if desired. Existing previews and exported files are snapshots
+and do not update automatically.
+
+Evidence attachment notes are separate from the current assessment. Saved
+manual retest attachments retain their own notes and appear newest first by
+attachment time; replacing local validation does not remove those attachments.
 
 ## Create a report
 
@@ -44,11 +61,13 @@ synthetic HTML and CSV examples.
 | All loaded findings | The loaded collection, including filtered-out rows, in loaded order. |
 | Visible (filtered) findings | Rows currently visible, in the table's displayed sort order. |
 | Selected finding | One selected table row. A selection is required. |
-| Reviewed findings only | Further restricts the chosen scope to saved Confirmed, False positive, Needs review, or Retest passed verdicts. |
+| Reviewed findings only | Further restricts the chosen scope to saved Confirmed, False positive, Won't fix, Needs review, or Retest passed verdicts. |
 
 An unreviewed finding remains **Not reviewed** even if you changed the verdict
 dropdown without saving. **Needs review** counts as reviewed because an analyst
 has saved an assessment; it does not mean the issue has been resolved.
+**Won't fix** also counts as reviewed and remains distinct from resolved or
+false positive. Both HTML and CSV preserve this saved verdict.
 
 The report keeps **local verdict**, **last loaded NightVision resolution**, and
 the **last remote-sync receipt** separate. A previous verified sync receipt is

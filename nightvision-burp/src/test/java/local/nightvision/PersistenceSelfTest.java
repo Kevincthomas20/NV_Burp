@@ -4,6 +4,7 @@ import burp.api.montoya.MontoyaApi;
 import com.google.gson.*;
 import javax.swing.*;
 import java.awt.Component;
+import java.awt.Container;
 import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -62,7 +63,7 @@ final class PersistenceSelfTest {
             testWriteFailures(reloaded, mode);
             mode.set(Mode.NORMAL);
             SwingUtilities.invokeAndWait(() -> {
-                JsonObject issue = json("{\"id\":\"" + ISSUE + "\",\"resolution\":1}");
+                JsonObject issue = json("{\"id\":\"" + ISSUE + "\",\"resolution\":2}");
                 try {
                     Method method = NightVisionExtension.class.getDeclaredMethod("recordRemoteUpdate", String.class, JsonObject.class, String.class);
                     method.setAccessible(true); method.invoke(reloaded, ISSUE, issue, "Verified remote receipt notes");
@@ -71,8 +72,73 @@ final class PersistenceSelfTest {
                 check(row.verdict().equals("False positive") && row.notes().equals("Verified remote receipt notes") && row.syncStatus().equals("verified"), "Verified remote updates use the same compatible checked save path and appear in reports");
             });
             check(store.keys().length == 1, "Manual and remote-sync validation share one preference record rather than duplicate keys");
+            testReplacement(reloaded, store, mode);
             testLegacyCompatibility();
         } finally { store.removeNode(); Preferences.userRoot().flush(); }
+    }
+
+    /** Clicks the actual save button repeatedly, then verifies the same record after reload and export. */
+    private static void testReplacement(NightVisionExtension extension, Preferences store, AtomicReference<Mode> mode) throws Exception {
+        String key = store.keys()[0], latestNotes = "Latest replacement review: café.\nAuthorization retest now passes.";
+        JsonObject before = json(store.get(key, "{}"));
+        String oldNotes = Finding.s(before, "notes"), earlierTime = "2026-01-01T00:00:00Z";
+        before.addProperty("updated_at", earlierTime); store.put(key, Finding.JSON.toJson(before)); store.flush();
+        AtomicReference<ValidationReport.Snapshot> original = new AtomicReference<>(), updated = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            original.set(extension.reportSnapshot(NightVisionExtension.ReportScope.ALL, false, OPTIONS));
+            edit(extension, "Retest passed", latestNotes);
+            JButton save = saveButton((Component) field(extension, "root"));
+            check(save != null && save.getToolTipText().contains("Replaces"), "The save button explains that the previous assessment will be replaced");
+            save.doClick(0);
+            check(status(extension).contains("Previous status and notes replaced") && status(extension).contains("new report"), "Repeat-save confirmation distinguishes replacement and prompts report regeneration");
+            invoke(extension, "showSelected");
+            check(notes(extension).equals(latestNotes) && verdict(extension).equals("Retest passed"), "The selected issue reloads replacement notes and verdict without appending the previous note");
+            updated.set(extension.reportSnapshot(NightVisionExtension.ReportScope.ALL, false, OPTIONS));
+        });
+        store.flush();
+        check(Arrays.equals(store.keys(), new String[]{key}), "Repeated button saves reuse the exact existing preference key rather than adding history records");
+        JsonObject saved = json(store.get(key, "{}"));
+        check(Finding.s(saved, "notes").equals(latestNotes) && Finding.s(saved, "status").equals("Retest passed") && !saved.toString().contains(oldNotes), "The real persisted record contains only the replacement assessment");
+        check(java.time.Instant.parse(Finding.s(saved, "updated_at")).isAfter(java.time.Instant.parse(earlierTime)), "Replacement records receive a new saved timestamp");
+        check(Finding.object(saved, "nightvision_sync").equals(Finding.object(before, "nightvision_sync")), "Replacing local notes preserves the independent historical remote-sync receipt");
+        check(updated.get().rows().size() == 1 && updated.get().rows().get(0).notes().equals(latestNotes), "A newly generated report has one current notes field for the issue");
+        check(original.get().rows().get(0).notes().equals(oldNotes), "An already-generated report remains a snapshot until explicitly regenerated");
+        Path folder = Files.createTempDirectory("nightvision-replacement-report-");
+        try {
+            for (ValidationReport.Format format : ValidationReport.Format.values()) {
+                Path path = folder.resolve("validation." + format.extension);
+                ValidationReport.write(path, ValidationReport.render(original.get(), format), false);
+                ValidationReport.Document replacement = ValidationReport.render(updated.get(), format);
+                ValidationReport.write(path, replacement, true);
+                String contents = Files.readString(path);
+                check(contents.contains(latestNotes) && contents.contains("Retest passed") && !contents.contains(oldNotes), "Regenerated " + format + " replaces the old report with only the newest saved assessment");
+                check(replacement.previewHtml().contains(latestNotes) && replacement.previewHtml().contains("Latest saved analyst notes") && !replacement.previewHtml().contains(oldNotes), "The " + format + " preview displays only the latest saved notes with an explicit label");
+            }
+        } finally {
+            try (var files = Files.walk(folder)) { for (Path path : files.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path); }
+        }
+        NightVisionExtension reloaded = extension(store, mode);
+        SwingUtilities.invokeAndWait(() -> {
+            invoke(reloaded, "demo");
+            check(notes(reloaded).equals(latestNotes) && verdict(reloaded).equals("Retest passed"), "A fresh extension instance sees only the most recent saved assessment for the same issue");
+            edit(reloaded, "Needs review", ""); saveButton((Component) field(reloaded, "root")).doClick(0);
+            invoke(reloaded, "showSelected");
+            check(notes(reloaded).isEmpty() && verdict(reloaded).equals("Needs review"), "Saving an empty note explicitly clears the previous saved text");
+            var cleared = reloaded.reportSnapshot(NightVisionExtension.ReportScope.ALL, false, OPTIONS);
+            String html = ValidationReport.render(cleared, ValidationReport.Format.HTML).content();
+            String csv = ValidationReport.render(cleared, ValidationReport.Format.CSV).content();
+            check(html.contains("No saved notes.") && !html.contains(latestNotes) && !csv.contains(latestNotes), "Reports reflect an intentional note clearing instead of reviving older saved text");
+            check(cleared.rows().get(0).syncStatus().equals("verified"), "Clearing a note also retains the historical sync receipt");
+        });
+        check(store.keys().length == 1 && Finding.s(json(store.get(key, "{}")), "notes").isEmpty(), "Repeated replacements and note clearing leave exactly one current saved record");
+    }
+
+    private static JButton saveButton(Component component) {
+        if (component instanceof JButton button && button.getText().equals("Save local validation")) return button;
+        if (component instanceof Container parent) for (Component child : parent.getComponents()) {
+            JButton button = saveButton(child); if (button != null) return button;
+        }
+        return null;
     }
 
     /** Checks the actual written HTML/CSV, not just an in-memory row or the status message. */
@@ -120,6 +186,8 @@ final class PersistenceSelfTest {
             invoke(extension, "showSelected");
             ValidationReport.Row row = extension.reportSnapshot(NightVisionExtension.ReportScope.ALL, true, OPTIONS).rows().get(0);
             check(row.notes().equals("updated compact-key note") && row.verdict().equals("Confirmed"), "Current saved values take precedence over stale legacy records in the UI and report");
+            edit(extension, "Needs review", ""); invoke(extension, "saveValidation"); invoke(extension, "showSelected");
+            check(notes(extension).isEmpty() && extension.reportSnapshot(NightVisionExtension.ReportScope.ALL, true, OPTIONS).rows().get(0).notes().isEmpty(), "An intentionally cleared current note never falls back to retained legacy note text");
         });
     }
 

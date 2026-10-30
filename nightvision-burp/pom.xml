@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>local.nightvision</groupId><artifactId>nightvision-burp</artifactId><version>0.5.4</version>
+  <groupId>local.nightvision</groupId><artifactId>nightvision-burp</artifactId><version>0.5.8</version>
+  <!-- Author credit for project metadata and tools that inspect the Maven descriptor. -->
+  <developers><developer><name>Kevin Thomas</name><roles><role>author</role></roles></developer></developers>
   <!-- Maven alternative to tools/build.py: compile Java 17 bytecode using UTF-8 source text. -->
   <properties><maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
   <dependencies>
@@ -18,7 +20,17 @@
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version></plugin>
     <!-- Shade runtime libraries into one loadable JAR, excluding their original signatures/module files. -->
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.1</version>
-      <executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration><createDependencyReducedPom>false</createDependencyReducedPom><filters><filter><artifact>*:*</artifact><excludes><exclude>META-INF/*.SF</exclude><exclude>META-INF/*.RSA</exclude><exclude>META-INF/*.DSA</exclude><exclude>module-info.class</exclude><exclude>META-INF/versions/**/module-info.class</exclude></excludes></filter></filters></configuration></execution></executions>
+      <executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
+        <createDependencyReducedPom>false</createDependencyReducedPom>
+        <!-- Match the authorship manifest produced by the Python build. -->
+        <transformers><transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"><manifestEntries>
+          <Implementation-Title>NightVision Finding Validator</Implementation-Title>
+          <Implementation-Version>${project.version}</Implementation-Version>
+          <Implementation-Vendor>Kevin Thomas</Implementation-Vendor>
+          <Extension-Author>Kevin Thomas</Extension-Author>
+        </manifestEntries></transformer></transformers>
+        <filters><filter><artifact>*:*</artifact><excludes><exclude>META-INF/*.SF</exclude><exclude>META-INF/*.RSA</exclude><exclude>META-INF/*.DSA</exclude><exclude>module-info.class</exclude><exclude>META-INF/versions/**/module-info.class</exclude></excludes></filter></filters>
+      </configuration></execution></executions>
     </plugin>
   </plugins></build>
 </project>

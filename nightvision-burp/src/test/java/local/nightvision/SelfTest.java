@@ -82,14 +82,14 @@ public class SelfTest {
         List<HttpRequest> updateCalls = new ArrayList<>();
         NightVisionClient writable = new NightVisionClient("https://api.example.test", "test-token", req -> {
             updateCalls.add(req);
-            return new NightVisionClient.Reply(200, "{\"id\":\"" + ISSUE + "\",\"resolution\":1}");
+            return new NightVisionClient.Reply(200, "{\"id\":\"" + ISSUE + "\",\"resolution\":2}");
         });
         JsonObject verified = writable.markFalsePositive(ISSUE);
-        check(Finding.s(verified, "resolution").equals("1"), "Return read-back verified false-positive resolution");
+        check(Finding.s(verified, "resolution").equals("2"), "Return read-back verified false-positive resolution");
         check(updateCalls.size() == 2 && updateCalls.get(0).method().equals("PUT") && updateCalls.get(1).method().equals("GET"), "Explicit write followed by verification, with no automatic retry");
         check(updateCalls.stream().allMatch(r -> r.uri().getPath().equals("/api/v1/issues/" + ISSUE + "/")), "Update only the selected issue endpoint");
         String writeBody = body(updateCalls.get(0));
-        check(writeBody.equals("{\"resolution\":1}"), "Only send the documented false-positive field; no notes or evidence overwrite");
+        check(writeBody.equals("{\"resolution\":2}"), "Send false positive code 2 rather than resolved code 1, without notes or evidence overwrite");
         check(updateCalls.get(0).headers().firstValue("Content-Type").orElseThrow().equals("application/json"), "JSON write content type");
         check(updateCalls.get(0).headers().firstValue("Authorization").orElseThrow().equals("Token test-token") && !writeBody.contains("test-token"), "Token only in API authorization header");
         updateCalls.clear();
@@ -103,16 +103,28 @@ public class SelfTest {
         catch (IllegalStateException e) { check(e.getMessage().contains("403") && !e.getMessage().contains("secret-token"), "Expose write permission error without secrets"); }
         check(updateCalls.size() == 1, "Do not retry denied writes or label them verified");
         NightVisionClient mismatched = new NightVisionClient("https://api.example.test", "test", req ->
-            new NightVisionClient.Reply(200, "{\"id\":\"" + ISSUE + "\",\"resolution\":" + (req.method().equals("PUT") ? 1 : 0) + "}"));
+            new NightVisionClient.Reply(200, "{\"id\":\"" + ISSUE + "\",\"resolution\":" + (req.method().equals("PUT") ? 2 : 0) + "}"));
         rejects(() -> mismatched.markFalsePositive(ISSUE), "Do not report success if read-back has another resolution");
         NightVisionClient wrongIssue = new NightVisionClient("https://api.example.test", "test", req ->
-            new NightVisionClient.Reply(200, "{\"id\":\"" + SCAN + "\",\"resolution\":1}"));
+            new NightVisionClient.Reply(200, "{\"id\":\"" + SCAN + "\",\"resolution\":2}"));
         rejects(() -> wrongIssue.markFalsePositive(ISSUE), "Reject wrong issue ID in read-back");
         NightVisionClient unverified = new NightVisionClient("https://api.example.test", "test", req ->
-            new NightVisionClient.Reply(req.method().equals("PUT") ? 200 : 500, "{\"id\":\"" + ISSUE + "\",\"resolution\":1}"));
+            new NightVisionClient.Reply(req.method().equals("PUT") ? 200 : 500, "{\"id\":\"" + ISSUE + "\",\"resolution\":2}"));
         try { unverified.markFalsePositive(ISSUE); throw new AssertionError("Read-back failure cannot be verified"); }
         catch (IllegalStateException e) { check(e.getMessage().contains("accepted") && e.getMessage().contains("could not be verified"), "Distinguish accepted update from failed verification"); }
-        check(new Finding(verified).resolutionDisplay().equals("False positive (1)"), "Display verified remote status");
+        check(new Finding(verified).resolutionDisplay().equals("False positive (2)"), "Display verified remote status");
+        // Independent numeric fixtures reproduce the live mapping rather than deriving it from the write constant.
+        for (var expected : Map.of(0, "Open (0)", 1, "Resolved (1)", 2, "False positive (2)", 4, "Won't fix (4)", 3, "API value 3").entrySet()) {
+            JsonObject issue = json("{\"resolution\":" + expected.getKey() + "}");
+            check(new Finding(issue).resolutionDisplay().equals(expected.getValue()), "Use the deployed web app's resolution labels and retain unknown codes");
+        }
+        List<HttpRequest> resolvedCalls = new ArrayList<>();
+        NightVisionClient stillResolved = new NightVisionClient("https://api.example.test", "test", req -> {
+            resolvedCalls.add(req);
+            return new NightVisionClient.Reply(200, "{\"id\":\"" + ISSUE + "\",\"resolution\":" + (req.method().equals("PUT") ? 2 : 1) + "}");
+        });
+        rejects(() -> stillResolved.markFalsePositive(ISSUE), "A resolved (1) read-back must never verify a false-positive action");
+        check(resolvedCalls.size() == 2 && body(resolvedCalls.get(0)).equals("{\"resolution\":2}"), "A mismatched resolved read-back never retries the write or substitutes the old value");
         // Request preparation: validate destinations and normalize headers while preserving body text.
         String raw = "POST /test HTTP/1.1\nHost: example.test\nContent-Type: text/plain\n\nline1\nline2\r\nend";
         String prepared = Finding.prepareRequest(raw);
@@ -201,7 +213,7 @@ public class SelfTest {
             sample = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
         JsonObject sampleIssue = JsonParser.parseString(sample).getAsJsonArray().get(0).getAsJsonObject();
-        sampleIssue.addProperty("resolution", 1);
+        sampleIssue.addProperty("resolution", 2);
         NightVisionClient delayed = new NightVisionClient("https://api.example.test", "test-token", req -> {
             if (req.method().equals("GET")) { verifying.countDown(); if (!allowVerification.await(3, TimeUnit.SECONDS)) throw new IllegalStateException("Test timed out"); }
             return new NightVisionClient.Reply(200, sampleIssue.toString());
@@ -218,7 +230,13 @@ public class SelfTest {
         allowVerification.countDown(); waitWorker(extension);
         SwingUtilities.invokeAndWait(() -> {
             JTable table = (JTable) field(extension, "table");
-            check(table.getModel().getValueAt(0, 5).equals("False positive (1)"), "Update displayed NightVision status after verification");
+            check(table.getModel().getValueAt(0, 5).equals("False positive (2)"), "Update displayed NightVision status after verification");
+            var reported = extension.reportSnapshot(NightVisionExtension.ReportScope.ALL, false,
+                new ValidationReport.Options("Resolution regression", "Test analyst", true, false, false));
+            check(reported.rows().get(0).remoteResolution().equals("False positive (2)")
+                && ValidationReport.render(reported, ValidationReport.Format.HTML).content().contains("False positive (2)"), "Reports use the corrected remote label after a verified false-positive update");
+            check(preferences.values().stream().filter(v -> v.startsWith("{")).map(SelfTest::json)
+                .anyMatch(v -> "2".equals(Finding.s(Finding.object(v, "nightvision_sync"), "resolution"))), "Saved sync receipts record false-positive code 2, matching the verified API value");
             check(table.getModel().getValueAt(0, 6).equals("False positive"), "Update local verdict after verified remote change");
             check(preferences.values().stream().anyMatch(v -> v.contains("nightvision_sync") && v.contains("False positive: reviewed output encoding")), "Save sync timestamp and analyst notes locally");
             check(((JLabel) field(extension, "status")).getText().contains("read-back verified"), "Show verified sync success");
@@ -275,6 +293,7 @@ public class SelfTest {
         TlsSelfTest.run();
         ReportSelfTest.run();
         PersistenceSelfTest.run();
+        ResolutionSelfTest.run();
         EvidenceSelfTest.run();
         EvidenceCompatibilitySelfTest.run();
         RepeaterSelfTest.run();

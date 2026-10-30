@@ -39,7 +39,7 @@ final class ValidationReport {
         }
         Row { captures = List.copyOf(captures); retests = List.copyOf(retests); }
         Row withRetests(List<EvidenceStore.ReportEvidence> entries) { return new Row(issueId, scanId, title, severity, method, target, remoteResolution, verdict, updatedAt, notes, syncStatus, verifiedAt, payload, evidence, evidenceDetails, captures, entries); }
-        boolean reviewed() { return Set.of("Confirmed", "False positive", "Needs review", "Retest passed").contains(verdict); }
+        boolean reviewed() { return Set.of("Confirmed", "False positive", "Won't fix", "Needs review", "Retest passed").contains(verdict); }
     }
     record Snapshot(Options options, String origin, String scanId, String scope, Instant generatedAt, List<Row> rows) {
         Snapshot { rows = List.copyOf(rows); }
@@ -106,6 +106,7 @@ final class ValidationReport {
         field(out, "API origin", snapshot.origin()); field(out, "Loaded scan UUID", blank(snapshot.scanId()));
         field(out, "Scope", snapshot.scope());
         out.append("</tbody></table><p class=\"notice\">Saved local assessments and the last loaded NightVision state are shown separately. "
+            + "Each issue shows its latest saved local validation; saving again replaces its previous status and notes. "
             + "Reports do not refresh findings or verify remediation. Common credential patterns are redacted; review remaining content before sharing.</p>");
         if (preview && limit < snapshot.rows().size()) out.append("<p><b>Preview shows the first ").append(limit)
             .append(" of ").append(snapshot.rows().size()).append(" findings. The saved file contains the full chosen scope.</b></p>");
@@ -124,7 +125,7 @@ final class ValidationReport {
             field(out, "Last remote sync receipt", blank(row.syncStatus()));
             if (!row.verifiedAt().isBlank()) field(out, "Remote sync verified (UTC)", row.verifiedAt());
             out.append("</tbody></table>");
-            if (options.notes()) block(out, "Saved analyst notes", row.notes().isBlank() ? "No saved notes." : row.notes());
+            if (options.notes()) block(out, "Latest saved analyst notes", row.notes().isBlank() ? "No saved notes." : row.notes());
             if (options.scannerEvidence()) {
                 block(out, "Scanner payload", row.payload()); block(out, "Scanner evidence", row.evidence()); block(out, "Scanner evidence details", row.evidenceDetails());
             }
@@ -157,7 +158,7 @@ final class ValidationReport {
             }
             out.append("</section>"); checkSize(out);
         }
-        out.append("<footer class=\"muted\">NightVision Finding Validator 0.5.4. Unsaved notes and current request edits are excluded. Retest messages appear only when explicitly attached and included. "
+        out.append("<footer class=\"muted\">NightVision Finding Validator 0.5.8. Extension author: Kevin Thomas. Reports are snapshots; generate a new report after saving changes. Unsaved notes and current request edits are excluded. Retest messages appear only when explicitly attached and included. "
             + "Individual fields are limited to 16,000 characters with a truncation marker. Print this HTML file from your browser to save a PDF.</footer></main></body></html>");
         return out.toString();
     }

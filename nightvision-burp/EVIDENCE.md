@@ -1,4 +1,4 @@
-# Manual retest evidence — version 0.5.4
+# Manual retest evidence — version 0.5.8
 
 Attach a completed HTTP exchange selected in Burp to a loaded NightVision
 finding. The extension saves the request and response locally, verifies their
@@ -26,7 +26,7 @@ It does not send the selected request, infer a verdict, or update NightVision.
 
 Burp may group the action under **Extensions → NightVision Finding Validator** in the editor’s right-click menu. For a selected request without a response, the action is disabled and its tooltip explains to send the request first.
 
-Version 0.5.4 supports the early API used by Burp Community 2022.12.6: `getRequestResponse()`, `httpRequest()` / `httpResponse()`, and `asBytes()`, alongside their current API equivalents. When the early exchange interface has no `hasResponse()` or service accessor, response availability comes from that exchange's response and its own request supplies the HTTP service. The build runs the complete evidence workflow against the pinned pre-1.0 Montoya 0.10.1 API in a separate JVM. The compiled workflow was also checked against the API classes bundled with the official Burp Community 2022.12.6 release; a live Burp UI was not launched. If an exchange still cannot be read, the same menu label remains as a diagnostic-only action. Clicking it shows the failure; it never substitutes a different selected exchange or saves evidence. Repeated identical compatibility warnings are deduplicated in the extension error log.
+Version 0.5.8 supports the early API used by Burp Community 2022.12.6: `getRequestResponse()`, `httpRequest()` / `httpResponse()`, and `asBytes()`, alongside their current API equivalents. When the early exchange interface has no `hasResponse()` or service accessor, response availability comes from that exchange's response and its own request supplies the HTTP service. The build runs the complete evidence workflow against the pinned pre-1.0 Montoya 0.10.1 API in a separate JVM. The compiled workflow was also checked against the API classes bundled with the official Burp Community 2022.12.6 release; a live Burp UI was not launched. If an exchange still cannot be read, the same menu label remains as a diagnostic-only action. Clicking it shows the failure; it never substitutes a different selected exchange or saves evidence. Repeated identical compatibility warnings are deduplicated in the extension error log.
 
 The attachment time is recorded automatically in UTC. It is not represented
 as the time the original request was sent. Test time, when supplied, is an

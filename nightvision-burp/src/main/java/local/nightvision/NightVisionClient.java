@@ -12,13 +12,15 @@ import javax.net.ssl.SSLException;
 /**
  * Sends authenticated requests to the NightVision API and validates its replies.
  * Finding and Traffic interpret the returned JSON; this class handles transport,
- * pagination, and the explicit false-positive update. It never replays target traffic.
+ * pagination, and explicit resolution updates. It never replays target traffic.
  */
 public final class NightVisionClient {
     public static final String DEFAULT_ORIGIN = "https://api.nightvision.net";
     static final int MAX_BODY = 20 * 1024 * 1024;
-    // NightVision's own src/types/index.ts documents 1=false_positive.
-    public static final int FALSE_POSITIVE_RESOLUTION = 1;
+    // The deployed NightVision web app maps 0=open, 1=resolved, 2=false positive,
+    // and 4=won't fix. The public MCP type comments have an outdated 1/2 mapping.
+    public static final int FALSE_POSITIVE_RESOLUTION = 2;
+    public static final int WONT_FIX_RESOLUTION = 4;
     // Keeping transport separate lets tests supply API replies without a live account.
     public record Reply(int status, String body) {}
     @FunctionalInterface interface Transport { Reply send(HttpRequest request) throws Exception; }
@@ -98,12 +100,20 @@ public final class NightVisionClient {
     }
     /** Fetches the detailed issue record, which may include traffic omitted from list results. */
     public JsonObject issue(String id) throws Exception { return get(origin.resolve("/api/v1/issues/" + id(id) + "/")); }
-    /** Updates one resolution and returns only after a separate GET verifies the saved value. */
+    /** Explicitly classifies one issue as false positive, with a separate read-back check. */
     public JsonObject markFalsePositive(String issueId) throws Exception {
+        return updateResolution(issueId, FALSE_POSITIVE_RESOLUTION);
+    }
+    /** Explicitly accepts one issue as won't fix, without marking it resolved or false positive. */
+    public JsonObject markWontFix(String issueId) throws Exception {
+        return updateResolution(issueId, WONT_FIX_RESOLUTION);
+    }
+    /** Both supported actions use one write followed by GET verification, without automatic retries. */
+    private JsonObject updateResolution(String issueId, int resolution) throws Exception {
         String selectedId = id(issueId);
         URI endpoint = origin.resolve("/api/v1/issues/" + selectedId + "/");
         JsonObject body = new JsonObject();
-        body.addProperty("resolution", FALSE_POSITIVE_RESOLUTION);
+        body.addProperty("resolution", resolution);
         try {
             // Send only the resolution; local analyst notes are never part of this update.
             exchange(endpoint, body);
@@ -117,7 +127,7 @@ public final class NightVisionClient {
             // A successful PUT alone is insufficient: confirm both identity and resolution.
             JsonObject refreshed = issue(selectedId);
             if (!selectedId.equals(Finding.s(refreshed, "id"))
-                || !Integer.toString(FALSE_POSITIVE_RESOLUTION).equals(Finding.s(refreshed, "resolution")))
+                || !Integer.toString(resolution).equals(Finding.s(refreshed, "resolution")))
                 throw new IllegalStateException("Read-back did not match the selected issue and resolution.");
             return refreshed;
         } catch (Exception e) {
@@ -170,7 +180,7 @@ public final class NightVisionClient {
     private JsonObject exchange(URI u, JsonObject update) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(u).timeout(Duration.ofSeconds(45))
                 .header("Authorization", authorization).header("Accept", "application/json")
-                .header("User-Agent", "NightVision-Burp/0.5.4");
+                .header("User-Agent", "NightVision-Burp/0.5.8");
         if (update == null) builder.GET();
         else builder.header("Content-Type", "application/json").PUT(HttpRequest.BodyPublishers.ofString(update.toString(), StandardCharsets.UTF_8));
         Reply r = transport.send(builder.build());

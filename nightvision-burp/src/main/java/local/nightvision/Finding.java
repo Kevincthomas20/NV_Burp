@@ -34,8 +34,9 @@ public record Finding(JsonObject data) {
         String resolution = s(data, "resolution");
         return switch (resolution) {
             case "0" -> "Open (0)";
-            case "1" -> "False positive (1)";
-            case "2" -> "Resolved (2)";
+            case "1" -> "Resolved (1)";
+            case "2" -> "False positive (2)";
+            case "4" -> "Won't fix (4)";
             default -> resolution.isBlank() ? "Unknown" : "API value " + resolution;
         };
     }

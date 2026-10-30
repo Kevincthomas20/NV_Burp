@@ -88,11 +88,12 @@ def build():
     # A separate JVM/classpath prevents modern SDK classes from masking missing legacy methods.
     legacy_cp = os.pathsep.join(str(p) for p in [tests, classes, legacy_api, *paths[1:]])
     run([java, "-Djava.awt.headless=true", "-cp", legacy_cp, "local.nightvision.EvidenceSelfTest"])
-    output = ROOT / "dist" / "nightvision-burp-0.5.4.jar"
+    output = ROOT / "dist" / "nightvision-burp-0.5.8.jar"
     output.parent.mkdir(exist_ok=True)
     # A JAR is a ZIP containing the manifest, compiled classes/resources, and bundled libraries.
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as jar:
-        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.5.4\r\n\r\n")
+        # Record the extension author in the distributable, independently of bundled library credits.
+        jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\nImplementation-Title: NightVision Finding Validator\r\nImplementation-Version: 0.5.8\r\nImplementation-Vendor: Kevin Thomas\r\nExtension-Author: Kevin Thomas\r\n\r\n")
         for path in sorted(classes.rglob("*")):
             if path.is_file(): jar.write(path, path.relative_to(classes).as_posix())
         # Exclude Montoya (paths[0]): Burp supplies that API at runtime.

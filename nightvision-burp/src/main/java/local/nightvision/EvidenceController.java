@@ -149,7 +149,7 @@ final class EvidenceController implements ContextMenuItemsProvider {
         String detail = type + (missing.isBlank() ? "" : "; missing member: " + missing);
         if (!detail.equals(lastCompatibilityFailure)) {
             lastCompatibilityFailure = detail;
-            try { api.logging().logToError("NightVision 0.5.4 evidence: could not read the selected HTTP exchange (" + detail
+            try { api.logging().logToError("NightVision 0.5.8 evidence: could not read the selected HTTP exchange (" + detail
                 + "). Editor, exchange, and byte access use public current/pre-1.0 API aliases resolved at runtime. Burp version: " + RepeaterBridge.hostVersion(api)
                 + ". No other selection was substituted. Raw HTTP and other exception text omitted."); }
             catch (RuntimeException | LinkageError ignored) { /* The visible action still explains the failure. */ }

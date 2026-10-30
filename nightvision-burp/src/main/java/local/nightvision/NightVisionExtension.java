@@ -26,6 +26,8 @@ import java.util.function.Supplier;
  * Burp entry point and Swing controller. Coordinates API access, CLI sign-in,
  * finding inspection, Repeater handoff, and locally saved analyst annotations.
  * UI actions run on Swing's event thread; blocking work goes through background().
+ *
+ * @author Kevin Thomas
  */
 public final class NightVisionExtension implements BurpExtension {
     // Session services. Factories allow offline tests to replace the CLI and API transport.
@@ -58,7 +60,7 @@ public final class NightVisionExtension implements BurpExtension {
     private final JTextField destination = new JTextField(50);
     // Keep Repeater feedback beside the action, even when the main status line is below the viewport.
     private final JLabel repeaterStatus = new JLabel("Review the request and destination before opening Repeater.");
-    private final JComboBox<String> verdict = new JComboBox<>(new String[]{"Not reviewed", "Confirmed", "False positive", "Needs review", "Retest passed"});
+    private final JComboBox<String> verdict = new JComboBox<>(new String[]{"Not reviewed", "Confirmed", "False positive", "Won't fix", "Needs review", "Retest passed"});
     // Model rows and findings share indices. A sorted/filtered view must convert its row index.
     private final List<Finding> findings = new ArrayList<>();
     private final List<JButton> buttons = new ArrayList<>();
@@ -104,7 +106,7 @@ public final class NightVisionExtension implements BurpExtension {
             buildUi();
             api.userInterface().registerSuiteTab("NightVision", root);
             api.userInterface().registerContextMenuItemsProvider(evidence);
-            api.logging().logToOutput("NightVision validator 0.5.4 loaded. SSO uses the official NightVision CLI and its saved credential. Sign-in credentials are not copied to extension preferences. Explicit evidence attachments save raw selected HTTP messages locally. Target requests open in Repeater for manual sending.");
+            api.logging().logToOutput("NightVision validator 0.5.8 loaded. SSO uses the official NightVision CLI and its saved credential. Sign-in credentials are not copied to extension preferences. Explicit evidence attachments save raw selected HTTP messages locally. Target requests open in Repeater for manual sending.");
         });
     }
     /** Creates a monospaced plain-text editor, with editing enabled only where intended. */
@@ -189,13 +191,19 @@ public final class NightVisionExtension implements BurpExtension {
         bottom.add(row(new JLabel("Destination URL (verify host / port / TLS)"), destination, button("Open in Repeater", this::repeater)));
         repeaterStatus.putClientProperty("html.disable", Boolean.TRUE);
         bottom.add(row(repeaterStatus));
-        bottom.add(row(new JLabel("Local validation"), verdict, button("Save local validation", this::saveValidation),
-            new JLabel("Replay manually in Repeater; then record your result here.")));
+        JButton saveValidation = button("Save local validation", this::saveValidation);
+        saveValidation.setToolTipText("Replaces this issue's previously saved status and notes. Generate a new report after saving.");
+        bottom.add(row(new JLabel("Local validation"), verdict, saveValidation,
+            new JLabel("Replaces this issue's previously saved status and notes.")));
         bottom.add(row(button("Mark false positive in NightVision", this::markFalsePositive),
+            button("Mark won't fix in NightVision", this::markWontFix),
             new JLabel("Updates the selected issue. Analyst notes stay local.")));
         notes.setRows(3); notes.setLineWrap(true); notes.setWrapStyleWord(true);
         JScrollPane notePane = new JScrollPane(notes); notePane.setBorder(BorderFactory.createTitledBorder("Analyst notes (saved locally only)"));
-        bottom.add(notePane); bottom.add(status); root.add(bottom, BorderLayout.SOUTH);
+        // Keep the extension's author visible beside live action feedback.
+        JPanel footer = new JPanel(new BorderLayout(12, 0));
+        footer.add(status, BorderLayout.CENTER); footer.add(new JLabel("Author: Kevin Thomas"), BorderLayout.EAST);
+        bottom.add(notePane); bottom.add(footer); root.add(bottom, BorderLayout.SOUTH);
     }
     /** Creates one capture selector and editor without assuming request/response pairing. */
     private JPanel trafficPanel(boolean isRequest) {
@@ -531,7 +539,7 @@ public final class NightVisionExtension implements BurpExtension {
                 : "Repeater handoff failed (" + type + ").";
             repeaterFeedback("Error: " + text + " See Extensions > NightVision > Errors.");
             String missing = RepeaterBridge.missingMember(e);
-            try { api.logging().logToError("NightVision 0.5.4: failed while " + stage + " (" + type
+            try { api.logging().logToError("NightVision 0.5.8: failed while " + stage + " (" + type
                 + "). Burp version: " + RepeaterBridge.hostVersion(api) + ". API: " + handoffApi + (missing.isBlank() ? "" : ". Missing member: " + missing)
                 + ". Report this stage, API signature, and your exact Burp version. Raw request and other exception text omitted."); }
             catch (RuntimeException | LinkageError ignored) { /* The on-screen error remains if logging is unavailable. */ }
@@ -587,10 +595,14 @@ public final class NightVisionExtension implements BurpExtension {
         if (!json.equals(api.persistence().preferences().getString(key)))
             throw new IllegalStateException("Local validation save could not be read back.");
     }
-    /** Saves the local verdict, notes, and timestamp without calling the NightVision API. */
+    /** Replaces the current issue's saved verdict/notes, retaining its historical remote-sync receipt. */
     private void saveValidation() {
         Finding f = selected(); if (f == null) { error("Select a finding first."); return; }
+        int modelRow = table.convertRowIndexToModel(table.getSelectedRow());
         JsonObject value = annotation(f.id()).deepCopy();
+        boolean replacing = value.has("status") || value.has("notes");
+        // One origin/issue key holds one current assessment. Replace both fields, including
+        // an intentionally empty note, rather than appending text or creating a history entry.
         value.addProperty("status", Objects.toString(verdict.getSelectedItem())); value.addProperty("notes", notes.getText());
         value.addProperty("updated_at", Instant.now().toString());
         String json = Finding.JSON.toJson(value);
@@ -598,12 +610,16 @@ public final class NightVisionExtension implements BurpExtension {
         if (json.length() > 7000 || json.getBytes(StandardCharsets.UTF_8).length > 7000) { error("Shorten the notes to fit the local preference store (7,000 bytes)."); return; }
         try {
             storeAnnotation(f.id(), value);
-            updateRow(table.convertRowIndexToModel(table.getSelectedRow()));
-            status.setText("Validation saved and read back from Burp preferences. NightVision was not updated.");
+            updateRow(modelRow);
+            status.setText("Validation saved and read back from Burp preferences. "
+                + (replacing ? "Previous status and notes replaced. " : "") + "Generate a new report to include this save.");
         } catch (RuntimeException e) { error("Local validation was not confirmed in Burp preferences. Your edits are still in the editor; copy them before reloading and retry saving."); }
     }
-    /** The explicit remote-write action: capture one issue and its notes, then update and verify. */
-    private void markFalsePositive() {
+    /** Each button chooses a fixed remote classification independently of the local dropdown. */
+    private void markFalsePositive() { markRemoteResolution(false); }
+    private void markWontFix() { markRemoteResolution(true); }
+    /** Capture one issue and its notes before asynchronous update/read-back verification. */
+    private void markRemoteResolution(boolean wontFix) {
         Finding f = selected(); NightVisionClient c = client;
         if (f == null) { error("Select a finding first."); return; }
         if (c == null) { error("Connect to NightVision to update a finding. The offline demo cannot change remote findings."); return; }
@@ -613,15 +629,24 @@ public final class NightVisionExtension implements BurpExtension {
         if (Finding.JSON.toJson(sizeCheck).getBytes(StandardCharsets.UTF_8).length > 6200) {
             error("Shorten the analyst notes before updating so they can be saved with the sync result."); return;
         }
-        background("Marking the selected finding false positive in NightVision, then verifying…",
-            () -> c.markFalsePositive(f.id()), refreshed -> recordRemoteUpdate(f.id(), refreshed, noteText));
+        String label = wontFix ? "Won't fix" : "False positive";
+        background("Marking the selected finding " + label + " in NightVision, then verifying…",
+            () -> wontFix ? c.markWontFix(f.id()) : c.markFalsePositive(f.id()),
+            refreshed -> recordRemoteUpdate(f.id(), refreshed, noteText));
     }
     /** Records a verified remote result locally and refreshes the issue shown in the table. */
     private void recordRemoteUpdate(String issueId, JsonObject refreshed, String noteText) {
+        // Derive the receipt and local verdict from the verified API reply, keeping 2 and 4 distinct.
+        int resolution = Integer.parseInt(Finding.s(refreshed, "resolution"));
+        String state = switch (resolution) {
+            case NightVisionClient.FALSE_POSITIVE_RESOLUTION -> "False positive";
+            case NightVisionClient.WONT_FIX_RESOLUTION -> "Won't fix";
+            default -> throw new IllegalStateException("Unsupported verified NightVision resolution.");
+        };
         String now = Instant.now().toString();
         JsonObject value = annotation(issueId).deepCopy();
-        value.addProperty("status", "False positive"); value.addProperty("notes", noteText); value.addProperty("updated_at", now);
-        JsonObject sync = new JsonObject(); sync.addProperty("status", "verified"); sync.addProperty("resolution", NightVisionClient.FALSE_POSITIVE_RESOLUTION); sync.addProperty("verified_at", now);
+        value.addProperty("status", state); value.addProperty("notes", noteText); value.addProperty("updated_at", now);
+        JsonObject sync = new JsonObject(); sync.addProperty("status", "verified"); sync.addProperty("resolution", resolution); sync.addProperty("verified_at", now);
         value.add("nightvision_sync", sync);
         // Remote success remains true even if the independent Burp preference write fails.
         boolean localSaved = false;
@@ -633,10 +658,10 @@ public final class NightVisionExtension implements BurpExtension {
             findings.set(i, new Finding(refreshed)); updateRow(i); break;
         }
         showSelected();
-        if (!localSaved) { verdict.setSelectedItem("False positive"); notes.setText(noteText); }
+        if (!localSaved) { verdict.setSelectedItem(state); notes.setText(noteText); }
         status.setText(localSaved
-            ? "NightVision marked this issue False positive and read-back verified it. Analyst notes saved locally."
-            : "NightVision marked this issue False positive and read-back verified it. Local notes could not be saved; copy them before leaving.");
+            ? "NightVision marked this issue " + state + " and read-back verified it. Analyst notes saved locally."
+            : "NightVision marked this issue " + state + " and read-back verified it. Local notes could not be saved; copy them before leaving.");
     }
     /** Exports loaded finding identifiers and saved annotations, omitting credentials and HTTP traffic. */
     private void export() {
